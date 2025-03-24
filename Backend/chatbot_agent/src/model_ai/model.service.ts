@@ -29,7 +29,7 @@ export class ModelService {
     max_tokens: 2000,
     temperature: 0.1,
     top_p: 0.95,
-    stop: ['[/INST]', '</s>'], // Arrêter la génération au format Mistral/Llama
+    stop: ['</s>'], // Arrêter la génération au format DeepSeek
   };
 
   constructor(
@@ -70,10 +70,10 @@ export class ModelService {
   }
 
   private formatPrompt(context: string, userInput: string): string {
-    // Format compatible avec DeepSeek/Llama
-    return `<s>[INST] ${context}
+    // Format compatible avec DeepSeek
+    return `<s>${context}
 
-${userInput} [/INST]`;
+${userInput}</s>`;
   }
 
   /**
