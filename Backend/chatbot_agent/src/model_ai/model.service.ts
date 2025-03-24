@@ -168,40 +168,46 @@ ${userInput}</s>`;
     options: RagQuestion[],
   ): Promise<RagResponse | null> {
     try {
-      // Préparer le prompt avec toutes les options pour que le LLM choisisse
       let optionsText = '';
       options.forEach((option, index) => {
         optionsText += `Option ${index + 1}:
-- Question: ${option.question}
+- Question originale: ${option.question}
 - Description: ${option.metadata.description}
 - SQL: ${option.metadata.sql}
-- Distance: ${option.distance}
+- Score de similarité: ${(1 - option.distance).toFixed(2)}
 
 `;
       });
 
       const formattedPrompt = this.formatPrompt(
-        `Vous êtes un expert en SQL qui doit sélectionner la requête SQL la plus pertinente pour répondre à une question.`,
+        `Vous êtes un expert en analyse sémantique et en SQL. Votre tâche est d'évaluer si une des questions proposées correspond suffisamment à la question de l'utilisateur pour être utilisée.`,
         `Question de l'utilisateur: "${userQuestion}"
 
-Voici des options de requêtes SQL existantes:
+Voici 5 questions existantes avec leurs requêtes SQL associées:
 ${optionsText}
 
-Analysez la question et les options de requêtes SQL disponibles. 
-Pour chaque option, évaluez si elle répond à la question posée, en tenant compte:
-1. De la sémantique de la question
-2. Des tables et colonnes référencées dans la requête SQL
-3. Des conditions et filtres appliqués
-4. De la pertinence globale pour répondre exactement à ce qui est demandé
+Processus d'analyse à suivre:
+1. Analysez l'intention principale de la question de l'utilisateur
+2. Pour chaque option:
+   - Comparez l'intention sémantique avec la question de l'utilisateur
+   - Vérifiez si la requête SQL associée permettrait de répondre à la question
+   - Tenez compte du score de similarité (plus il est proche de 1, plus c'est similaire)
+3. Une option est considérée comme valide si:
+   - Elle capture la même intention que la question de l'utilisateur
+   - La requête SQL permet effectivement d'obtenir les informations demandées
+   - Le score de similarité est suffisamment élevé (> 0.5)
 
-Choisissez l'option la plus pertinente et retournez uniquement son numéro (1, 2, 3, 4 ou 5). 
-Si aucune option n'est pertinente, répondez "0".`,
+Répondez UNIQUEMENT avec:
+- Le numéro de l'option la plus pertinente (1-5) si une correspondance valide est trouvée
+- "0" si aucune option ne correspond suffisamment à la question
+
+Votre réponse (juste un chiffre):`,
       );
 
-      // Appeler l'API LM Studio avec des paramètres pour une réponse courte
       const shortConfig = {
         ...this.modelConfig,
         max_tokens: 10,
+        temperature: 0.1, // Réduction de la température pour une réponse plus déterministe
       };
 
       const response = await axios.post(
@@ -211,25 +217,32 @@ Si aucune option n'est pertinente, répondez "0".`,
           ...shortConfig,
         },
         {
-          timeout: 120000, // Augmentation du timeout à 120 secondes
+          timeout: 120000,
         },
       );
 
-      // Extraire le numéro de l'option choisie
       const fullResponse = response.data.choices[0].text || '';
       const match = fullResponse.match(/\d+/);
 
       if (!match || match[0] === '0') {
-        // Aucune option pertinente trouvée
+        this.logger.log('Aucune correspondance suffisante trouvée');
         return null;
       }
 
       const selectedIndex = parseInt(match[0], 10) - 1;
       if (selectedIndex < 0 || selectedIndex >= options.length) {
+        this.logger.log('Index sélectionné hors limites');
         return null;
       }
 
       const selected = options[selectedIndex];
+      
+      // Vérification supplémentaire du score de similarité
+      if (selected.distance > 0.5) {
+        this.logger.log('Score de similarité trop faible');
+        return null;
+      }
+
       return {
         question: selected.question,
         sql: selected.metadata.sql,
