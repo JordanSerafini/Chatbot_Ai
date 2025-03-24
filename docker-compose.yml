@@ -106,36 +106,24 @@ services:
     depends_on:
       - rag_service
 
+
   # lmstudio:
   #   build:
   #     context: ./Backend/lmstudio
   #     dockerfile: Dockerfile
   #   ports:
-  #     - "3000:3000"
-  #   environment:
-  #     - LM_STUDIO_URL=http://lmstudio:1234
-  #   depends_on:
-  #     - lmstudio
+  #     - "1234:1234"
+  #   volumes:
+  #     - ./models:/app/models
+  #   deploy:
+  #     resources:
+  #       reservations:
+  #         devices:
+  #           - driver: nvidia
+  #             count: 1
+  #             capabilities: [gpu]
   #   networks:
   #     - app-network
-
-  lmstudio:
-    build:
-      context: .
-      dockerfile: Dockerfile.lmstudio
-    ports:
-      - "1234:1234"
-    volumes:
-      - ./models:/app/models
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-    networks:
-      - app-network
 
 networks:
   app-network:
