@@ -144,17 +144,59 @@ ${userInput}</s>`;
       const ragServiceUrl = this.configService.get<string>('RAG_SERVICE_URL') || 'http://localhost:3002';
       this.logger.log(`Calling RAG service at ${ragServiceUrl}/rag/similar with question: ${question}`);
       
+      // Ajout de paramètres pour améliorer la recherche
       const response = await axios.post(`${ragServiceUrl}/rag/similar`, {
         question,
         nResults: 5,
+        threshold: 0.3, // Seuil de similarité plus permissif
+        collection: 'sql_queries', // Spécifier explicitement la collection
+        includeMetadata: true // S'assurer que les métadonnées sont incluses
       });
 
-      this.logger.log(`RAG service response: ${JSON.stringify(response.data)}`);
-      return response.data;
+      if (!response.data || !Array.isArray(response.data)) {
+        this.logger.error('RAG service response is not in expected format', response.data);
+        return [];
+      }
+
+      const questions = response.data;
+      this.logger.log(`Found ${questions.length} similar questions`);
+      
+      // Log détaillé de chaque question trouvée
+      questions.forEach((q, index) => {
+        this.logger.log(`Question ${index + 1}:
+        - Question: ${q.question}
+        - Distance: ${q.distance}
+        - Description: ${q.metadata?.description}
+        - SQL: ${q.metadata?.sql}`);
+      });
+
+      // Vérification de la validité des questions
+      const validQuestions = questions.filter(q => 
+        q.question && 
+        q.metadata?.sql && 
+        q.metadata?.description &&
+        typeof q.distance === 'number'
+      );
+
+      if (validQuestions.length === 0) {
+        this.logger.warn('No valid questions found in RAG response');
+        return [];
+      }
+
+      if (validQuestions.length < questions.length) {
+        this.logger.warn(`Filtered out ${questions.length - validQuestions.length} invalid questions`);
+      }
+
+      return validQuestions;
     } catch (error) {
       this.logger.error(`Error getting similar questions: ${error.message}`);
       if (error.response) {
         this.logger.error(`Response data: ${JSON.stringify(error.response.data)}`);
+        this.logger.error(`Response status: ${error.response.status}`);
+        this.logger.error(`Response headers: ${JSON.stringify(error.response.headers)}`);
+      }
+      if (error.request) {
+        this.logger.error('Request was made but no response received');
       }
       return [];
     }
@@ -317,14 +359,22 @@ Votre réponse (juste un chiffre):`,
     selectedQuery: RagResponse,
   ): Promise<string> {
     const formattedPrompt = this.formatPrompt(
-      `Vous êtes un assistant qui aide à expliquer des requêtes SQL et leurs résultats.`,
-      `Question: "${userQuestion}"
-       
-J'ai trouvé une requête SQL qui pourrait répondre à cette question:
+      `Vous êtes un assistant spécialisé dans l'analyse de données pour une entreprise de bâtiment. Votre rôle est d'expliquer clairement les informations que nous pouvons obtenir à partir d'une requête SQL.`,
+      `Question de l'utilisateur: "${userQuestion}"
+
+La requête SQL suivante a été sélectionnée comme la plus pertinente:
 - Description: ${selectedQuery.description}
 - SQL: ${selectedQuery.sql}
-       
-Veuillez expliquer ce que fait cette requête SQL et comment elle répond à la question. Quelles informations cette requête va-t-elle retourner?`,
+
+Instructions pour la réponse:
+1. Commencez par confirmer que cette requête est pertinente pour la question posée
+2. Expliquez en termes simples quelles informations cette requête va chercher dans la base de données
+3. Détaillez les différents éléments qui seront affichés (noms des projets, dates, clients, etc.)
+4. Si la requête contient des filtres ou conditions (WHERE, HAVING, etc.), expliquez leur signification
+5. Concluez en expliquant comment ces informations répondent à la question de l'utilisateur
+
+Votre réponse doit être claire, concise et adaptée à un utilisateur qui n'est pas technique.
+Utilisez un format structuré avec des puces ou des paragraphes courts pour une meilleure lisibilité.`,
     );
 
     return this.callLmStudioApi(formattedPrompt);
