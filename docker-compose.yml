@@ -1,0 +1,125 @@
+services:
+
+  postgres:
+    container_name: postgres
+    image: ankane/pgvector:latest
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      - "${POSTGRES_PORT}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./Database/init_db.sql:/docker-entrypoint-initdb.d/1-init_db.sql
+      - ./Database/seed.sql:/docker-entrypoint-initdb.d/2-seed.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - app-network
+
+  pgadmin:
+    container_name: pgadmin
+    image: dpage/pgadmin4
+    ports:
+      - "5050:80"
+    environment:
+      PGADMIN_DEFAULT_EMAIL: "pgadmin@pgadmin.com"
+      PGADMIN_DEFAULT_PASSWORD: "pgadmin"
+    networks:
+      - app-network
+
+
+  zipkin:
+    container_name: zipkin
+    image: openzipkin/zipkin
+    ports:
+      - "9411:9411"
+    depends_on: [otel-collector]
+    networks:
+      - app-network
+  otel-collector:
+    container_name: otel-collector
+    image: otel/opentelemetry-collector-contrib:0.111.0
+    command: ["--config=/etc/otel-collector-config.yaml"]
+    volumes:
+      - ./ChromaDB/otel-collector-config.yaml:/etc/otel-collector-config.yaml
+    networks:
+      - app-network
+      
+  ChromaDB:
+    container_name: ChromaDB
+    image: ghcr.io/chroma-core/chroma
+    volumes:
+      - chroma_data:/chroma/chroma
+    ports:
+      - "8000:8000"
+    networks:
+      - app-network
+    environment:
+      - CHROMA_OPEN_TELEMETRY__ENDPOINT=http://otel-collector:4317/
+      - CHROMA_OPEN_TELEMETRY__SERVICE_NAME=chroma
+      - CHROMA_SERVER_CORS_ALLOW_ORIGINS=["*"]
+      - CHROMA_PERSIST_DIRECTORY=/chroma/chroma
+    depends_on:
+      - otel-collector
+      - zipkin
+
+  rag_service:
+    container_name: rag_service
+    build:
+      context: ./Backend/rag_service
+      dockerfile: Dockerfile
+    volumes:
+      - ./Backend/rag_service:/app
+      - ./Backend/chroma_db/query:/app/query
+      - /app/node_modules
+    ports:
+      - "3002:3002"
+    environment:
+      - NODE_ENV=development
+    depends_on:
+      - ChromaDB
+    networks:
+      - app-network
+    command: npm run start:dev
+
+  chatbot_agent:
+    container_name: chatbot_agent
+    build:
+      context: ./Backend/chatbot_agent
+      dockerfile: Dockerfile
+    volumes:
+      - ./Backend/chatbot_agent:/app
+      - /app/node_modules
+    ports:
+      - "3001:3001"
+    environment:
+      - NODE_ENV=development
+      - RAG_SERVICE_URL=http://rag_service:3001
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=${POSTGRES_PORT}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rag_service:
+        condition: service_started
+    networks:
+      - app-network
+    command: npm run start:dev
+
+networks:
+  app-network:
+    driver: bridge
+
+volumes:
+  chroma_data:
+  postgres_data:
+
+      
