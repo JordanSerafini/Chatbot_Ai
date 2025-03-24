@@ -75,12 +75,13 @@ services:
       dockerfile: Dockerfile
     volumes:
       - ./Backend/rag_service:/app
-      - ./Backend/chroma_db/query:/app/query
+      - ./Database/Query:/app/query
       - /app/node_modules
     ports:
       - "3002:3002"
     environment:
       - NODE_ENV=development
+      - CHROMA_URL=http://ChromaDB:8000
     depends_on:
       - ChromaDB
     networks:
@@ -99,7 +100,7 @@ services:
       - "3001:3001"
     environment:
       - NODE_ENV=development
-      - RAG_SERVICE_URL=http://rag_service:3001
+      - RAG_SERVICE_URL=http://rag_service:3002
       - POSTGRES_HOST=postgres
       - POSTGRES_PORT=${POSTGRES_PORT}
       - POSTGRES_USER=${POSTGRES_USER}
