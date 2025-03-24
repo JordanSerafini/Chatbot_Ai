@@ -591,8 +591,8 @@ export class RagService {
       // Prendre la meilleure correspondance si elle dépasse le seuil
       const bestMatch = candidates[0];
 
-      if (bestMatch && bestMatch.similarity > 0.7) {
-        const queryId = bestMatch.id.split('-')[0]; // Extraire l'ID de base
+      if (bestMatch && bestMatch.similarity > 0.55) {
+        const queryId = bestMatch.id.split('-')[0];
 
         // Extraire les paramètres possibles de la requête
         const parameters = bestMatch.metadata.parameters || [];
@@ -745,19 +745,7 @@ export class RagService {
       // Nettoyer la question pour une meilleure comparaison
       const cleanedQuestion = this.cleanText(question);
 
-      // 1. Recherche de prompts similaires dans la collection 'questions_collection'
-      // Abaisser le seuil de similarité pour être plus permissif
-      const similarPrompt = await this.findSimilarPrompt(
-        'questions_collection',
-        cleanedQuestion,
-        0.4,
-      );
-      this.logger.log(
-        `Résultat de findSimilarPrompt: ${JSON.stringify(similarPrompt)}`,
-      );
-
-      // 2. Chercher si une question similaire existe déjà dans la base de connaissances
-      // Passer la question originale et la question nettoyée pour maximiser les chances de correspondance
+      // Chercher directement si une question similaire existe déjà dans la base de connaissances
       const similarQuestion = await this.findSimilarStoredQuestion(
         question,
         cleanedQuestion,
@@ -767,10 +755,10 @@ export class RagService {
         `Résultat de findSimilarStoredQuestion: ${JSON.stringify(similarQuestion)}`,
       );
 
-      // 3. Si une question similaire est trouvée avec une bonne confiance
+      // Si une question similaire est trouvée avec une bonne confiance
       if (similarQuestion.found && similarQuestion.sql) {
-        // Calculer un score de confiance basé sur la similarité cosinus si possible
-        let confidence = similarQuestion.similarity || 0.7;
+        // Calculer un score de confiance basé sur la similarité
+        let confidence = similarQuestion.similarity || 0.6;
 
         // Essayer d'améliorer le score de confiance avec d'autres métriques
         const textualSimilarity = this.calculateSimilarity(
@@ -778,46 +766,47 @@ export class RagService {
           this.cleanText(similarQuestion.description || ''),
         );
 
-        // Si nous avons des embeddings (vecteurs de représentation), utiliser la similarité cosinus
-        if (
-          similarPrompt &&
-          similarPrompt.found &&
-          similarPrompt.metadata &&
-          similarPrompt.metadata.embedding
-        ) {
-          // Récupérer un embedding de la question (simulation)
-          const questionEmbedding =
-            this.generateSimpleEmbedding(cleanedQuestion);
-          const storedEmbedding = similarPrompt.metadata.embedding;
-
-          // Calculer la similarité cosinus
-          const cosineSim = this.cosineSimilarity(
-            questionEmbedding,
-            storedEmbedding,
-          );
-
-          // Intégrer ce score dans notre confiance globale
-          confidence =
-            confidence * 0.5 + textualSimilarity * 0.2 + cosineSim * 0.3;
-          this.logger.log(`Similarité cosinus calculée: ${cosineSim}`);
-        } else {
-          // Sans embeddings, utiliser uniquement la similarité textuelle
-          confidence = confidence * 0.7 + textualSimilarity * 0.3;
-        }
+        // Sans embeddings, utiliser uniquement la similarité textuelle
+        confidence = confidence * 0.7 + textualSimilarity * 0.3;
 
         this.logger.log(
           `Utilisation d'une requête SQL existante: ${similarQuestion.queryId} (confiance: ${confidence})`,
         );
 
+        // Préparer les paramètres pour la requête SQL
+        let finalSql = similarQuestion.sql;
+        if (
+          similarQuestion.parameters &&
+          similarQuestion.parameters.length > 0
+        ) {
+          const paramMap = {};
+          similarQuestion.parameters.forEach((param) => {
+            paramMap[param.name] = param.value;
+          });
+
+          // Remplacer les paramètres dans la requête SQL
+          Object.entries(paramMap).forEach(([key, value]) => {
+            // Échapper les valeurs pour éviter les injections SQL
+            const escapedValue = this.escapeSqlValue(value as string);
+            // Remplacer tous les occurrences de [KEY] par la valeur
+            const parameterPattern = new RegExp(`\\[${key}\\]`, 'gi');
+            finalSql = finalSql.replace(parameterPattern, escapedValue);
+          });
+        }
+
         // Utiliser la requête SQL existante au lieu d'en générer une nouvelle
         return {
           question,
-          finalQuery: similarQuestion.sql,
+          finalQuery: finalSql,
+          originalQuery: similarQuestion.sql,
           fromStoredQuery: true,
           storedQueryId: similarQuestion.queryId,
           similarity: similarQuestion.similarity,
           source: 'rag', // Indiquer que la requête vient du RAG et non de la génération
           confidence: confidence, // Utiliser la similarité comme score de confiance
+          parameters: similarQuestion.parameters || [],
+          description: similarQuestion.description,
+          bestMatch: similarQuestion,
         };
       }
 
@@ -838,6 +827,13 @@ export class RagService {
       );
       throw error;
     }
+  }
+
+  // Méthode simple pour échapper les valeurs SQL pour éviter les injections
+  private escapeSqlValue(value: string): string {
+    if (!value) return '';
+    // Simple échappement des apostrophes
+    return value.replace(/'/g, "''");
   }
 
   // Fonction simple pour générer un pseudo-embedding pour une question
