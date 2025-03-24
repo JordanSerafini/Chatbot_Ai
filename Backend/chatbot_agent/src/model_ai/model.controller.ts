@@ -1,4 +1,4 @@
-import { Body, Controller, Post, Logger } from '@nestjs/common';
+import { Body, Controller, Post, Logger, Headers } from '@nestjs/common';
 import { ModelService } from './model.service';
 
 interface QueryDto {
@@ -35,22 +35,30 @@ interface SimilarityResponseDto {
 export class ModelController {
   private readonly logger = new Logger(ModelController.name);
 
-  constructor(private readonly modelService: ModelService) {}
+  constructor(private readonly modelService: ModelService) {
+    this.logger.log('ModelController initialized');
+  }
 
   @Post('query')
   async generateResponse(
     @Body() queryDto: QueryDto,
+    @Headers() headers: Record<string, string>,
   ): Promise<QueryResponseDto> {
-    this.logger.log(`Received question: ${queryDto.question}`);
+    this.logger.log('=== START REQUEST PROCESSING ===');
+    this.logger.log(`Headers received: ${JSON.stringify(headers)}`);
+    this.logger.log(`Request body: ${JSON.stringify(queryDto)}`);
 
     try {
       const context =
         queryDto.context ||
         "Vous êtes un assistant expert en gestion d'entreprise qui aide à répondre aux questions sur les clients, projets, factures et planning.";
 
+      this.logger.log('Getting similar questions from RAG service...');
       // 1. Obtenir toutes les questions similaires du service RAG
       const similarQuestions =
         await this.modelService.getSimilarQuestionsPublic(queryDto.question);
+
+      this.logger.log(`Found ${similarQuestions?.length || 0} similar questions`);
 
       // 2. Si aucune question similaire, générer une réponse directe
       if (!similarQuestions || similarQuestions.length === 0) {

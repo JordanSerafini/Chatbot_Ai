@@ -39,13 +39,12 @@ export class ModelService {
 
   async onModuleInit() {
     this.logger.log('ModelService initialized for LM Studio');
-    // Vérifier que LM Studio est accessible
+    this.logger.log(`LM Studio URL: ${this.getLmStudioUrl()}`);
+    this.logger.log(`RAG Service URL: ${this.configService.get<string>('RAG_SERVICE_URL')}`);
     try {
       await this.checkLmStudioAvailability();
     } catch (error) {
-      this.logger.warn(
-        `LM Studio API may not be available: ${error.message}. Ensure LM Studio is running with API server enabled.`,
-      );
+      this.logger.error(`LM Studio not available: ${error.message}`);
     }
   }
 
@@ -80,41 +79,31 @@ ${userInput}</s>`;
    * Génère une réponse à partir de l'entrée utilisateur en utilisant le service RAG et le modèle LLM local
    */
   async generateResponse(context: string, userInput: string): Promise<string> {
+    this.logger.log(`Starting generateResponse with input: ${userInput}`);
     try {
-      // 1. Obtenir des questions similaires depuis le service RAG
+      this.logger.log('Getting similar questions...');
       const similarQuestions = await this.getSimilarQuestions(userInput);
 
+      this.logger.log(`Got ${similarQuestions?.length || 0} similar questions`);
+      
       if (!similarQuestions || similarQuestions.length === 0) {
-        // Si aucune question similaire n'est trouvée, générer une réponse directement avec le LLM
+        this.logger.log('No similar questions found, generating direct response');
         return await this.generateDirectResponse(context, userInput);
       }
 
-      // 2. Demander au LLM de choisir la meilleure requête SQL
+      this.logger.log('Selecting best match...');
       const bestMatch = await this.selectBestMatch(userInput, similarQuestions);
 
       if (!bestMatch) {
-        // Si le LLM ne peut pas sélectionner une requête, générer une réponse directement
+        this.logger.log('No best match found, generating direct response');
         return await this.generateDirectResponse(context, userInput);
       }
 
-      // 3. Formater les résultats en langage naturel pour l'utilisateur
-      const formattedPrompt = this.formatPrompt(
-        `Vous êtes un assistant qui aide à expliquer des requêtes SQL et leurs résultats.`,
-        `Question: "${userInput}"
-         
-J'ai trouvé une requête SQL qui pourrait répondre à cette question:
-- Description: ${bestMatch.description}
-- SQL: ${bestMatch.sql}
-         
-Veuillez expliquer ce que fait cette requête SQL et comment elle répond à la question. Quelles informations cette requête va-t-elle retourner?`,
-      );
-
-      // Appeler l'API LM Studio
-      const response = await this.callLmStudioApi(formattedPrompt);
-      return response;
+      this.logger.log(`Best match found: ${JSON.stringify(bestMatch)}`);
+      return await this.explainSqlQuery(context, userInput, bestMatch);
     } catch (error) {
-      this.logger.error(`Failed to generate response: ${error.message}`);
-      throw new Error(`Failed to generate response: ${error.message}`);
+      this.logger.error(`Error in generateResponse: ${error.message}`);
+      throw error;
     }
   }
 
@@ -152,17 +141,21 @@ Veuillez expliquer ce que fait cette requête SQL et comment elle répond à la 
    */
   private async getSimilarQuestions(question: string): Promise<RagQuestion[]> {
     try {
-      const ragServiceUrl =
-        this.configService.get<string>('RAG_SERVICE_URL') ||
-        'http://localhost:3002';
+      const ragServiceUrl = this.configService.get<string>('RAG_SERVICE_URL') || 'http://localhost:3002';
+      this.logger.log(`Calling RAG service at ${ragServiceUrl}/rag/similar with question: ${question}`);
+      
       const response = await axios.post(`${ragServiceUrl}/rag/similar`, {
         question,
         nResults: 5,
       });
 
+      this.logger.log(`RAG service response: ${JSON.stringify(response.data)}`);
       return response.data;
     } catch (error) {
       this.logger.error(`Error getting similar questions: ${error.message}`);
+      if (error.response) {
+        this.logger.error(`Response data: ${JSON.stringify(error.response.data)}`);
+      }
       return [];
     }
   }

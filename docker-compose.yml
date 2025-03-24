@@ -96,26 +96,13 @@ services:
     volumes:
       - ./Backend/chatbot_agent:/app
       - /app/node_modules
-    ports:
-      - "3001:3001"
+    network_mode: "host"
     environment:
       - NODE_ENV=development
-      - RAG_SERVICE_URL=http://rag_service:3002
-      - POSTGRES_HOST=postgres
-      - POSTGRES_PORT=${POSTGRES_PORT}
-      - POSTGRES_USER=${POSTGRES_USER}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-      - POSTGRES_DB=${POSTGRES_DB}
+      - LM_STUDIO_URL=http://localhost:1234/v1
+      - RAG_SERVICE_URL=http://localhost:3002
     depends_on:
-      postgres:
-        condition: service_healthy
-      rag_service:
-        condition: service_started
-    networks:
-      - app-network
-    command: npm run start:dev
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+      - rag_service
 
 networks:
   app-network:
