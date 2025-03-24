@@ -78,7 +78,7 @@ ${userInput}</s>`;
   /**
    * Génère une réponse à partir de l'entrée utilisateur en utilisant le service RAG et le modèle LLM local
    */
-  async generateResponse(context: string, userInput: string): Promise<string> {
+  async generateResponse(context: string, userInput: string): Promise<any> {
     this.logger.log(`Starting generateResponse with input: ${userInput}`);
     try {
       this.logger.log('Getting similar questions...');
@@ -88,7 +88,14 @@ ${userInput}</s>`;
       
       if (!similarQuestions || similarQuestions.length === 0) {
         this.logger.log('No similar questions found, generating direct response');
-        return await this.generateDirectResponse(context, userInput);
+        const directResponse = await this.generateDirectResponse(context, userInput);
+        return {
+          question: userInput,
+          answer: directResponse,
+          source: 'direct',
+          allOptions: [],
+          confidence: 0
+        };
       }
 
       this.logger.log('Selecting best match...');
@@ -96,13 +103,71 @@ ${userInput}</s>`;
 
       if (!bestMatch) {
         this.logger.log('No best match found, generating direct response');
-        return await this.generateDirectResponse(context, userInput);
+        const directResponse = await this.generateDirectResponse(context, userInput);
+        return {
+          question: userInput,
+          answer: directResponse,
+          source: 'direct',
+          allOptions: similarQuestions,
+          confidence: 0
+        };
       }
 
       this.logger.log(`Best match found: ${JSON.stringify(bestMatch)}`);
-      return await this.explainSqlQuery(context, userInput, bestMatch);
+      
+      // Préparer la réponse pour l'agent SQL
+      return {
+        question: userInput,
+        answer: await this.prepareAgentResponse(userInput, bestMatch),
+        source: 'sql',
+        selectedQuery: {
+          sql: bestMatch.sql,
+          description: bestMatch.description,
+          parameters: bestMatch.parameters || []
+        },
+        allOptions: similarQuestions,
+        confidence: 1 - bestMatch.distance
+      };
     } catch (error) {
       this.logger.error(`Error in generateResponse: ${error.message}`);
+      throw error;
+    }
+  }
+
+  private async prepareAgentResponse(userQuestion: string, selectedQuery: RagResponse): Promise<string> {
+    const formattedPrompt = this.formatPrompt(
+      `Vous êtes un assistant qui prépare une réponse pour un agent SQL.`,
+      `Question: "${userQuestion}"
+
+La requête SQL suivante sera exécutée:
+${selectedQuery.sql}
+
+Cette requête ${selectedQuery.description}.
+
+Préparez une courte introduction qui:
+1. Confirme que nous allons chercher les informations demandées
+2. Explique brièvement quelles informations seront affichées
+3. Ne faites pas de suppositions sur les résultats, car la requête n'a pas encore été exécutée
+
+FORMAT SOUHAITÉ:
+**Réponse :**
+
+Je vais rechercher [type d'information] pour répondre à votre question.
+
+La requête va nous donner:
+- [liste des informations qui seront affichées]
+
+[Une phrase de conclusion sur le filtrage appliqué]`,
+    );
+
+    try {
+      const response = await this.callLmStudioApi(formattedPrompt);
+      if (!response.includes("**Réponse")) {
+        return `**Réponse :**\n\n${response}`;
+      }
+      return response;
+    } catch (error) {
+      this.logger.error(`Error in prepareAgentResponse: ${error.message}`);
       throw error;
     }
   }
@@ -113,23 +178,31 @@ ${userInput}</s>`;
   private async callLmStudioApi(prompt: string): Promise<string> {
     try {
       const lmStudioUrl = this.getLmStudioUrl();
+      this.logger.log(`Sending prompt to LM Studio:\n${prompt}`);
+      
+      const requestBody = {
+        prompt,
+        model: 'deepseek-r1-distill-llama-8b',
+        ...this.modelConfig,
+      };
+      
+      this.logger.log(`Request configuration: ${JSON.stringify(requestBody, null, 2)}`);
+
       const response = await axios.post(
         `${lmStudioUrl}/completions`,
+        requestBody,
         {
-          prompt,
-          model: 'deepseek-r1-distill-llama-8b',
-          ...this.modelConfig,
-        },
-        {
-          timeout: 120000, // Augmentation du timeout à 120 secondes
+          timeout: 120000,
         },
       );
 
-      // Extraire et retourner le texte généré sans les balises de fin
-      const generatedText = response.data.choices[0].text || '';
+      this.logger.log(`LM Studio raw response: ${JSON.stringify(response.data, null, 2)}`);
 
-      // Nettoyer la sortie
-      return generatedText.trim();
+      const generatedText = response.data.choices[0].text || '';
+      const cleanedText = generatedText.trim();
+      
+      this.logger.log(`Cleaned response text: "${cleanedText}"`);
+      return cleanedText;
     } catch (error) {
       this.logger.error(`Error calling LM Studio API: ${error.message}`);
       throw error;
@@ -210,46 +283,36 @@ ${userInput}</s>`;
     options: RagQuestion[],
   ): Promise<RagResponse | null> {
     try {
+      this.logger.log('Starting selectBestMatch process...');
       let optionsText = '';
       options.forEach((option, index) => {
-        optionsText += `Option ${index + 1}:
-- Question originale: ${option.question}
-- Description: ${option.metadata.description}
-- SQL: ${option.metadata.sql}
-- Score de similarité: ${(1 - option.distance).toFixed(2)}
-
-`;
+        optionsText += `${index + 1}) "${option.question}" (${(1 - option.distance).toFixed(2)})\n`;
       });
 
       const formattedPrompt = this.formatPrompt(
-        `Vous êtes un expert en analyse sémantique et en SQL. Votre tâche est d'évaluer si une des questions proposées correspond suffisamment à la question de l'utilisateur pour être utilisée.`,
-        `Question de l'utilisateur: "${userQuestion}"
+        `Vous êtes un système de sélection automatique qui doit choisir un numéro.`,
+        `QUESTION: "${userQuestion}"
 
-Voici 5 questions existantes avec leurs requêtes SQL associées:
+OPTIONS:
 ${optionsText}
+RÈGLES:
+1. Répondez UNIQUEMENT par un chiffre entre 0 et 5
+2. Choisissez l'option qui correspond le mieux à la question
+3. Si aucune option ne correspond bien, répondez 0
+4. Ne donnez AUCUNE explication
 
-Processus d'analyse à suivre:
-1. Analysez l'intention principale de la question de l'utilisateur
-2. Pour chaque option:
-   - Comparez l'intention sémantique avec la question de l'utilisateur
-   - Vérifiez si la requête SQL associée permettrait de répondre à la question
-   - Tenez compte du score de similarité (plus il est proche de 1, plus c'est similaire)
-3. Une option est considérée comme valide si:
-   - Elle capture la même intention que la question de l'utilisateur
-   - La requête SQL permet effectivement d'obtenir les informations demandées
-   - Le score de similarité est suffisamment élevé (> 0.5)
-
-Répondez UNIQUEMENT avec:
-- Le numéro de l'option la plus pertinente (1-5) si une correspondance valide est trouvée
-- "0" si aucune option ne correspond suffisamment à la question
-
-Votre réponse (juste un chiffre):`,
+RÉPONSE:</s>`,
       );
 
+      this.logger.log('Calling LM Studio for best match selection...');
       const shortConfig = {
         ...this.modelConfig,
-        max_tokens: 10,
-        temperature: 0.1, // Réduction de la température pour une réponse plus déterministe
+        max_tokens: 1,
+        temperature: 0.1,
+        top_p: 1,
+        frequency_penalty: 0,
+        presence_penalty: 0,
+        stop: ["\n", " ", ",", "."]
       };
 
       const response = await axios.post(
@@ -263,25 +326,35 @@ Votre réponse (juste un chiffre):`,
         },
       );
 
-      const fullResponse = response.data.choices[0].text || '';
-      const match = fullResponse.match(/\d+/);
+      this.logger.log(`LM Studio selection response: ${JSON.stringify(response.data, null, 2)}`);
+
+      const fullResponse = response.data.choices[0].text.trim();
+      this.logger.log(`Raw selection response: "${fullResponse}"`);
+      
+      const match = fullResponse.match(/^[0-5]$/);
+      this.logger.log(`Matched selection: ${match ? match[0] : 'no match'}`);
 
       if (!match || match[0] === '0') {
-        this.logger.log('Aucune correspondance suffisante trouvée');
+        this.logger.log('No sufficient match found');
         return null;
       }
 
       const selectedIndex = parseInt(match[0], 10) - 1;
       if (selectedIndex < 0 || selectedIndex >= options.length) {
-        this.logger.log('Index sélectionné hors limites');
+        this.logger.log(`Selected index ${selectedIndex} is out of bounds`);
         return null;
       }
 
       const selected = options[selectedIndex];
+      this.logger.log(`Selected option ${selectedIndex + 1}:
+      Question: ${selected.question}
+      Description: ${selected.metadata.description}
+      Distance: ${selected.distance}
+      SQL: ${selected.metadata.sql}`);
       
-      // Vérification supplémentaire du score de similarité
-      if (selected.distance > 0.5) {
-        this.logger.log('Score de similarité trop faible');
+      // Vérification plus stricte de la similarité
+      if (selected.distance > 0.3) {
+        this.logger.log(`Score de similarité trop faible: ${selected.distance}`);
         return null;
       }
 
@@ -293,7 +366,10 @@ Votre réponse (juste un chiffre):`,
         parameters: selected.metadata.parameters,
       };
     } catch (error) {
-      this.logger.error(`Error selecting best match: ${error.message}`);
+      this.logger.error(`Error in selectBestMatch: ${error.message}`);
+      if (error.response) {
+        this.logger.error(`Response error data: ${JSON.stringify(error.response.data)}`);
+      }
       return null;
     }
   }
