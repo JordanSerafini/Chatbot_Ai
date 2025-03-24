@@ -1,0 +1,15 @@
+@startuml architecture_backend
+
+title: Architecture du backend
+
+package "API Gateway" {
+        [API Gateway]
+    }
+
+
+
+
+
+
+
+@enduml
