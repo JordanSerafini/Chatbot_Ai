@@ -29,7 +29,7 @@ export class ModelService {
     max_tokens: 2000,
     temperature: 0.1,
     top_p: 0.95,
-    stop: ['</s>', '<|im_end|>'], // Arrêter la génération au format Mistral
+    stop: ['[/INST]', '</s>'], // Arrêter la génération au format Mistral/Llama
   };
 
   constructor(
@@ -70,12 +70,10 @@ export class ModelService {
   }
 
   private formatPrompt(context: string, userInput: string): string {
-    // Format compatible avec DeepSeek
-    return `<s>
-${context}
+    // Format compatible avec DeepSeek/Llama
+    return `<s>[INST] ${context}
 
-${userInput}
-</s>`;
+${userInput} [/INST]`;
   }
 
   /**
@@ -334,5 +332,21 @@ Veuillez expliquer ce que fait cette requête SQL et comment elle répond à la 
     userInput: string,
   ): Promise<string> {
     return this.generateDirectResponse(context, userInput);
+  }
+
+  /**
+   * Renvoie la question choisie ou indique l'absence de similarité
+   */
+  async getSelectedQuestionOrSimilarity(
+    userQuestion: string,
+    options: RagQuestion[],
+  ): Promise<string> {
+    const bestMatch = await this.selectBestMatch(userQuestion, options);
+    
+    if (!bestMatch) {
+      return 'pas de similarité';
+    }
+    
+    return bestMatch.question;
   }
 }

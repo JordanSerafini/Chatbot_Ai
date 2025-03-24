@@ -27,6 +27,10 @@ interface QueryResponseDto {
   confidence?: number;
 }
 
+interface SimilarityResponseDto {
+  result: string;
+}
+
 @Controller('ai')
 export class ModelController {
   private readonly logger = new Logger(ModelController.name);
@@ -119,6 +123,32 @@ export class ModelController {
       };
     } catch (error) {
       this.logger.error(`Error generating response: ${error.message}`);
+      throw error;
+    }
+  }
+
+  @Post('similarity-check')
+  async checkSimilarity(@Body() queryDto: QueryDto): Promise<SimilarityResponseDto> {
+    this.logger.log(`Checking similarity for question: ${queryDto.question}`);
+
+    try {
+      // Obtenir toutes les questions similaires du service RAG
+      const similarQuestions = await this.modelService.getSimilarQuestionsPublic(queryDto.question);
+
+      // Si aucune question similaire, retourner directement "pas de similarité"
+      if (!similarQuestions || similarQuestions.length === 0) {
+        return { result: 'pas de similarité' };
+      }
+
+      // Demander au modèle de vérifier la similarité
+      const similarQuestion = await this.modelService.getSelectedQuestionOrSimilarity(
+        queryDto.question,
+        similarQuestions,
+      );
+
+      return { result: similarQuestion };
+    } catch (error) {
+      this.logger.error(`Error checking similarity: ${error.message}`);
       throw error;
     }
   }
