@@ -29,7 +29,7 @@ export class ModelService {
     max_tokens: 2000,
     temperature: 0.1,
     top_p: 0.95,
-    stop: ['[/INST]', '</s>'], // Arrêter la génération au format Mistral
+    stop: ['</s>', '<|im_end|>'], // Arrêter la génération au format Mistral
   };
 
   constructor(
@@ -71,9 +71,11 @@ export class ModelService {
 
   private formatPrompt(context: string, userInput: string): string {
     // Format compatible avec DeepSeek
-    return `<s>[INST] ${context}
+    return `<s>
+${context}
 
-${userInput} [/INST]`;
+${userInput}
+</s>`;
   }
 
   /**
@@ -124,11 +126,17 @@ Veuillez expliquer ce que fait cette requête SQL et comment elle répond à la 
   private async callLmStudioApi(prompt: string): Promise<string> {
     try {
       const lmStudioUrl = this.getLmStudioUrl();
-      const response = await axios.post(`${lmStudioUrl}/completions`, {
-        prompt,
-        model: 'deepseek-r1-distill-llama-8b',
-        ...this.modelConfig,
-      });
+      const response = await axios.post(
+        `${lmStudioUrl}/completions`,
+        {
+          prompt,
+          model: 'deepseek-r1-distill-llama-8b',
+          ...this.modelConfig,
+        },
+        {
+          timeout: 120000, // Augmentation du timeout à 120 secondes
+        },
+      );
 
       // Extraire et retourner le texte généré sans les balises de fin
       const generatedText = response.data.choices[0].text || '';
@@ -211,6 +219,9 @@ Si aucune option n'est pertinente, répondez "0".`,
           prompt: formattedPrompt,
           ...shortConfig,
         },
+        {
+          timeout: 120000, // Augmentation du timeout à 120 secondes
+        },
       );
 
       // Extraire le numéro de l'option choisie
@@ -256,6 +267,9 @@ Si aucune option n'est pertinente, répondez "0".`,
         {
           prompt: formattedPrompt,
           ...this.modelConfig,
+        },
+        {
+          timeout: 120000, // Augmentation du timeout à 120 secondes
         },
       );
 
