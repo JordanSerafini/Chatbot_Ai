@@ -98,32 +98,42 @@ ${userInput}</s>`;
       }
 
       this.logger.log('Selecting best match...');
-      const bestMatch = await this.selectBestMatch(userInput, similarQuestions);
+      const matchResult = await this.selectBestMatch(userInput, similarQuestions);
 
-      if (!bestMatch) {
-        this.logger.log('No best match found');
+      if (matchResult.noQuery) {
         return {
           question: userInput,
-          answer: "Pas de similarité trouvée",
+          answer: matchResult.noQuery,
           source: 'direct',
           allOptions: similarQuestions,
           confidence: 0
         };
       }
 
-      this.logger.log(`Best match found: ${JSON.stringify(bestMatch)}`);
-      
+      // Si on a une requête sélectionnée
+      if (matchResult.querySelected) {
+        const selectedQuestion = similarQuestions.find(q => q.metadata.sql === matchResult.querySelected);
+        
+        return {
+          question: userInput,
+          answer: selectedQuestion ? `J'ai trouvé une correspondance : ${selectedQuestion.question}` : "Requête sélectionnée",
+          source: 'sql',
+          selectedQuery: {
+            sql: matchResult.querySelected,
+            description: selectedQuestion?.metadata.description || '',
+            parameters: selectedQuestion?.metadata.parameters || []
+          },
+          allOptions: similarQuestions,
+          confidence: selectedQuestion ? (1 - selectedQuestion.distance) : 0.5
+        };
+      }
+
       return {
         question: userInput,
-        answer: `J'ai trouvé une correspondance : ${bestMatch.question}`,
-        source: 'sql',
-        selectedQuery: {
-          sql: bestMatch.sql,
-          description: bestMatch.description,
-          parameters: bestMatch.parameters || []
-        },
+        answer: "Pas de similarité trouvée",
+        source: 'direct',
         allOptions: similarQuestions,
-        confidence: 1 - bestMatch.distance
+        confidence: 0
       };
 
     } catch (error) {
