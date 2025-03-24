@@ -24,6 +24,7 @@ interface QueryData {
   questions: string[];
   sql: string;
   description: string;
+  parameters?: Array<{ name: string; description: string }>;
 }
 
 interface JsonData {
@@ -256,6 +257,91 @@ export class SqlQueriesService {
         err,
       );
       throw err;
+    }
+  }
+
+  async executeQuery(
+    queryId: string,
+    params?: Record<string, string>,
+  ): Promise<any> {
+    try {
+      const collection = await this.getOrCreateCollection();
+      const results = await collection.get({
+        where: { id: queryId },
+      });
+
+      if (!results || !results.ids.length) {
+        throw new Error(`Requête non trouvée: ${queryId}`);
+      }
+
+      const index = results.ids.indexOf(queryId);
+      if (index === -1) {
+        throw new Error(`Index de requête non trouvé: ${queryId}`);
+      }
+
+      let sql = (results.metadatas[index] as QueryMetadata).sql;
+
+      // Remplacer les paramètres dans la requête SQL si des paramètres sont fournis
+      if (params) {
+        Object.entries(params).forEach(([key, value]) => {
+          // Échapper les valeurs pour éviter les injections SQL
+          const escapedValue = this.escapeSqlValue(value);
+          // Remplacer tous les occurrences de [KEY] par la valeur
+          const parameterPattern = new RegExp(`\\[${key}\\]`, 'gi');
+          sql = sql.replace(parameterPattern, escapedValue);
+        });
+      }
+
+      this.logger.log(`Exécution de la requête SQL: ${sql}`);
+      // Ici, vous connecteriez à votre base de données et exécuteriez la requête SQL
+      // Retourner le résultat
+      return { sql, params, status: 'success' };
+    } catch (error) {
+      this.logger.error(
+        `Erreur lors de l'exécution de la requête: ${error.message}`,
+      );
+      throw error;
+    }
+  }
+
+  private escapeSqlValue(value: string): string {
+    // Méthode simple d'échappement pour éviter les injections SQL
+    // Dans une implémentation réelle, utilisez les fonctionnalités d'échappement
+    // fournies par votre bibliothèque de base de données
+    return value.replace(/'/g, "''");
+  }
+
+  /**
+   * Récupère ou crée la collection ChromaDB pour les requêtes SQL
+   */
+  private async getOrCreateCollection(): Promise<Collection> {
+    try {
+      // Simple no-op embedding function
+      const embeddingFunction = new NoOpEmbeddingFunction();
+
+      // Vérifier si la collection existe déjà
+      const collections = await this.client.listCollections();
+      if (collections.includes(this.COLLECTION_NAME)) {
+        // Récupérer la collection existante
+        return await this.client.getCollection({
+          name: this.COLLECTION_NAME,
+          embeddingFunction,
+        });
+      } else {
+        // Créer une nouvelle collection
+        return await this.client.createCollection({
+          name: this.COLLECTION_NAME,
+          embeddingFunction,
+          metadata: {
+            description: 'Collection des requêtes SQL paramétrées',
+          },
+        });
+      }
+    } catch (error) {
+      this.logger.error(
+        `Erreur lors de l'accès à la collection: ${error.message}`,
+      );
+      throw error;
     }
   }
 }

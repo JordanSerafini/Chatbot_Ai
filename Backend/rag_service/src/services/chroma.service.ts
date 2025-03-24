@@ -174,8 +174,7 @@ export class ChromaService implements OnModuleInit {
       // Utiliser la recherche en texte intégral de ChromaDB
       const results = await this.collection.query({
         queryTexts: [question],
-        nResults: Math.min(50, nResults * 5), // Récupérer plus de résultats pour filtrer après
-        where: {}, // Pas de filtrage spécifique
+        nResults: Math.min(50, nResults * 5),
       });
 
       if (!results || !results.documents || results.documents.length === 0) {
@@ -188,6 +187,7 @@ export class ChromaService implements OnModuleInit {
         metadata: {
           sql: (results.metadatas[0][index] as any)?.sql || '',
           description: (results.metadatas[0][index] as any)?.description || '',
+          parameters: (results.metadatas[0][index] as any)?.parameters || [],
         },
         distance: results.distances ? results.distances[0][index] : 0,
       }));
@@ -314,5 +314,23 @@ export class ChromaService implements OnModuleInit {
       return 0;
     }
     return await this.collection.count();
+  }
+
+  /**
+   * Vérifie si ChromaDB est disponible en tentant de lister les collections
+   * @returns Une promesse qui se résout si ChromaDB est disponible, sinon rejette avec une erreur
+   */
+  async checkHealth(): Promise<boolean> {
+    try {
+      // Tente de lister les collections pour vérifier la connexion
+      await this.client.listCollections();
+      return true;
+    } catch (error) {
+      this.logger.error(
+        'Erreur lors de la vérification de la santé de ChromaDB:',
+        error,
+      );
+      throw error;
+    }
   }
 }

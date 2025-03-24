@@ -543,59 +543,145 @@ export class RagService {
     parameters?: any[];
   }> {
     try {
-      // Vérifier si nous avons des requêtes stockées
-      const result = await this.findSimilarPrompt(
-        'questions_collection',
-        question,
-        0.5,
-      );
+      const collection = await this.getCollection('questions_collection');
+      if (!collection) {
+        return { found: false };
+      }
 
-      if (result && result.found && result.metadata) {
+      const cleanInput = this.cleanText(question);
+
+      // Recherche des questions similaires
+      const result = await collection.query({
+        queryTexts: [cleanInput],
+        nResults: 5,
+      });
+
+      if (!result.ids || result.ids.length === 0 || !result.ids[0].length) {
+        return { found: false };
+      }
+
+      // Analyser les résultats
+      const questions = result.documents[0] as string[];
+      const ids = result.ids[0] as string[];
+      const metadatas = result.metadatas[0] as Record<string, any>[];
+      const distances = result.distances ? result.distances[0] : [];
+
+      // Calculer la similarité et sélectionner la meilleure correspondance
+      const candidates = questions.map((q, i) => {
+        // Utiliser une approche hybride - combinaison de la distance vectorielle et textuelle
+        const vectorDistance = distances[i] || 0;
+        const textSimilarity = this.calculateSimilarity(
+          cleanInput,
+          this.cleanText(q),
+        );
+        // Combiner les scores avec un poids approprié
+        const combinedScore = 0.3 * (1 - vectorDistance) + 0.7 * textSimilarity;
+
+        return {
+          question: q,
+          id: ids[i],
+          metadata: metadatas[i],
+          similarity: combinedScore,
+        };
+      });
+
+      // Trier par score de similarité
+      candidates.sort((a, b) => b.similarity - a.similarity);
+
+      // Prendre la meilleure correspondance si elle dépasse le seuil
+      const bestMatch = candidates[0];
+
+      if (bestMatch && bestMatch.similarity > 0.7) {
+        const queryId = bestMatch.id.split('-')[0]; // Extraire l'ID de base
+
+        // Extraire les paramètres possibles de la requête
+        const parameters = bestMatch.metadata.parameters || [];
+
+        // Détecter les valeurs des paramètres dans la question de l'utilisateur
+        const extractedParams = this.extractParametersFromQuestion(
+          question,
+          reformulatedQuestion,
+          parameters,
+        );
+
         return {
           found: true,
-          queryId: result.metadata.id || '',
-          sql: result.metadata.sql || '',
-          description: result.metadata.description || '',
-          similarity: result.similarity || 0,
-          parameters: result.metadata.parameters || [],
+          queryId,
+          sql: bestMatch.metadata.sql,
+          description: bestMatch.metadata.description,
+          similarity: bestMatch.similarity,
+          parameters: extractedParams,
         };
       }
 
-      // Si rien n'a été trouvé avec la question originale, essayer avec la reformulation
-      if (reformulatedQuestion && reformulatedQuestion !== question) {
-        const reformulatedResult = await this.findSimilarPrompt(
-          'questions_collection',
-          reformulatedQuestion,
-          0.4,
-        );
-
-        if (
-          reformulatedResult &&
-          reformulatedResult.found &&
-          reformulatedResult.metadata
-        ) {
-          return {
-            found: true,
-            queryId: reformulatedResult.metadata.id || '',
-            sql: reformulatedResult.metadata.sql || '',
-            description: reformulatedResult.metadata.description || '',
-            similarity: reformulatedResult.similarity || 0,
-            parameters: reformulatedResult.metadata.parameters || [],
-          };
-        }
-      }
-
-      // Aucune correspondance trouvée
-      this.logger.log(
-        'Aucune question similaire trouvée avec un seuil de similarité suffisant',
-      );
       return { found: false };
     } catch (error) {
       this.logger.error(
-        `Erreur lors de la recherche de questions similaires: ${error.message}`,
+        'Erreur lors de la recherche de questions similaires:',
+        error,
       );
       return { found: false };
     }
+  }
+
+  /**
+   * Extrait les valeurs des paramètres depuis la question de l'utilisateur
+   */
+  private extractParametersFromQuestion(
+    originalQuestion: string,
+    reformulatedQuestion: string,
+    parameters: Array<{ name: string; description: string }>,
+  ): Array<{ name: string; value: string }> {
+    if (!parameters || parameters.length === 0) {
+      return [];
+    }
+
+    const extractedParams: Array<{ name: string; value: string }> = [];
+
+    // Pour chaque paramètre défini
+    for (const param of parameters) {
+      const paramName = param.name;
+
+      // Stratégies d'extraction de paramètres
+      // 1. Recherche de motifs spécifiques (ex: "à Paris", "pour Paris")
+      const cityPattern = new RegExp(
+        `(?:à|de|pour|dans|sur)\\s+([A-ZÀ-Ú][a-zà-ú-]+)`,
+        'i',
+      );
+      const datePattern = new RegExp(
+        `(?:le|du|avant|après|depuis)\\s+(\\d{1,2}[/-]\\d{1,2}[/-]\\d{2,4})`,
+        'i',
+      );
+
+      let extractedValue: string | null = null;
+
+      // Appliquer la stratégie d'extraction appropriée selon le type de paramètre
+      if (paramName === 'CITY') {
+        const match =
+          originalQuestion.match(cityPattern) ||
+          reformulatedQuestion.match(cityPattern);
+        if (match && match[1]) {
+          extractedValue = match[1];
+        }
+      } else if (paramName.includes('DATE')) {
+        const match =
+          originalQuestion.match(datePattern) ||
+          reformulatedQuestion.match(datePattern);
+        if (match && match[1]) {
+          extractedValue = match[1];
+        }
+      }
+
+      // Si une valeur a été extraite, l'ajouter aux paramètres
+      if (extractedValue) {
+        extractedParams.push({
+          name: paramName,
+          value: extractedValue,
+        });
+      }
+    }
+
+    return extractedParams;
   }
 
   // Nettoyer le texte pour une meilleure comparaison

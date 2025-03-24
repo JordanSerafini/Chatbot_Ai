@@ -263,6 +263,20 @@ export class RagController {
     );
   }
 
+  @Get('similar')
+  async getSimilarQuestions(
+    @Query('question') question: string,
+    @Query('limit') limit?: number,
+  ): Promise<SimilarQuestion[]> {
+    if (!question) {
+      throw new BadRequestException('Le paramètre "question" est requis');
+    }
+    return await this.chromaService.findSimilarQuestions(
+      question,
+      limit ? parseInt(limit.toString(), 10) : 5,
+    );
+  }
+
   @Post('analyse')
   async analyseQuestion(@Body() { question }: { question: string }) {
     const similarQuestions =
