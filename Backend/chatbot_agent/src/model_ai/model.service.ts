@@ -1,4 +1,3 @@
-import { HfInference } from '@huggingface/inference';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import axios from 'axios';
@@ -23,44 +22,63 @@ interface RagResponse {
 
 @Injectable()
 export class ModelService {
-  private model: HfInference;
-  private readonly modelName = 'mistralai/Mistral-7B-Instruct-v0.2';
   private readonly logger = new Logger(ModelService.name);
+  // Configuration par défaut pour l'API LM Studio
   private readonly modelConfig = {
-    inputs: 'text',
-    parameters: {
-      max_new_tokens: 1000,
-      temperature: 0.2,
-      repetition_penalty: 1.1,
-      top_k: 50,
-      top_p: 0.9,
-    },
+    temperature: 0.2,
+    max_tokens: 1000,
+    top_p: 0.9,
+    top_k: 50,
+    repeat_penalty: 1.1,
+    stop: ['</s>'],
   };
 
   constructor(private readonly configService: ConfigService) {}
 
   async onModuleInit() {
-    const token = this.configService.get<string>('HUGGING_FACE_TOKEN');
-    if (!token) {
-      throw new Error('HUGGINGFACE_TOKEN is not set');
+    this.logger.log('ModelService initialized for LM Studio');
+    // Vérifier que LM Studio est accessible
+    try {
+      await this.checkLmStudioAvailability();
+    } catch (error) {
+      this.logger.warn(
+        `LM Studio API may not be available: ${error.message}. Ensure LM Studio is running with API server enabled.`,
+      );
     }
-    await this.initializeModel(token);
-    this.logger.log('ModelService initialized');
   }
 
-  private async initializeModel(token: string): Promise<void> {
-    this.model = new HfInference(token);
-    await Promise.resolve();
+  private async checkLmStudioAvailability(): Promise<void> {
+    try {
+      const lmStudioUrl = this.getLmStudioUrl();
+      await axios.get(`${lmStudioUrl}/v1/models`);
+      this.logger.log('Successfully connected to LM Studio API');
+    } catch (error) {
+      this.logger.error(`Failed to connect to LM Studio API: ${error.message}`);
+      throw new Error(
+        'LM Studio API is not available. Please ensure LM Studio is running with API server enabled.',
+      );
+    }
+  }
+
+  private getLmStudioUrl(): string {
+    return (
+      this.configService.get<string>('LM_STUDIO_URL') ||
+      'http://localhost:1234/v1'
+    );
   }
 
   private formatPrompt(context: string, userInput: string): string {
-    return `<s>[INST] ${context}
-
-${userInput} [/INST]</s>`;
+    // Format compatible avec Mistral-Nemo
+    return `<|im_start|>system
+${context}<|im_end|>
+<|im_start|>user
+${userInput}<|im_end|>
+<|im_start|>assistant
+`;
   }
 
   /**
-   * Génère une réponse à partir de l'entrée utilisateur en utilisant le service RAG et le modèle LLM
+   * Génère une réponse à partir de l'entrée utilisateur en utilisant le service RAG et le modèle LLM local
    */
   async generateResponse(context: string, userInput: string): Promise<string> {
     try {
@@ -80,34 +98,51 @@ ${userInput} [/INST]</s>`;
         return await this.generateDirectResponse(context, userInput);
       }
 
-      // 3. Exécuter la requête SQL (à implémenter ultérieurement)
-      // const queryResult = await this.executeQuery(bestMatch.sql);
-
-      // 4. Formater les résultats en langage naturel pour l'utilisateur
+      // 3. Formater les résultats en langage naturel pour l'utilisateur
       const formattedPrompt = this.formatPrompt(
-        `Vous êtes un assistant qui aide à expliquer des requêtes SQL et leurs résultats.
-         
-La question de l'utilisateur est: "${userInput}"
+        `Vous êtes un assistant qui aide à expliquer des requêtes SQL et leurs résultats.`,
+        `Question: "${userInput}"
          
 J'ai trouvé une requête SQL qui pourrait répondre à cette question:
 - Description: ${bestMatch.description}
 - SQL: ${bestMatch.sql}
          
-Veuillez expliquer ce que fait cette requête SQL et comment elle répond à la question de l'utilisateur.
-Expliquez également quelles informations cette requête va retourner.`,
-        "Veuillez m'expliquer cette requête SQL.",
+Veuillez expliquer ce que fait cette requête SQL et comment elle répond à la question. Quelles informations cette requête va-t-elle retourner?`,
       );
 
-      const response = await this.model.textGeneration({
-        model: this.modelName,
-        inputs: formattedPrompt,
-        parameters: this.modelConfig.parameters,
-      });
-
-      return response.generated_text;
+      // Appeler l'API LM Studio
+      const response = await this.callLmStudioApi(formattedPrompt);
+      return response;
     } catch (error) {
       this.logger.error(`Failed to generate response: ${error.message}`);
       throw new Error(`Failed to generate response: ${error.message}`);
+    }
+  }
+
+  /**
+   * Appelle l'API LM Studio pour générer une réponse
+   */
+  private async callLmStudioApi(prompt: string): Promise<string> {
+    try {
+      const lmStudioUrl = this.getLmStudioUrl();
+      const response = await axios.post(`${lmStudioUrl}/completions`, {
+        prompt,
+        model: 'mistral-nemo-instruct-2407', // Ou laissez vide pour utiliser le modèle actuellement chargé
+        ...this.modelConfig,
+      });
+
+      // Extraire et retourner le texte généré sans les balises de fin
+      let generatedText = response.data.choices[0].text || '';
+
+      // Nettoyer la sortie (enlever les balises de fin potentielles)
+      if (generatedText.includes('<|im_end|>')) {
+        generatedText = generatedText.split('<|im_end|>')[0];
+      }
+
+      return generatedText.trim();
+    } catch (error) {
+      this.logger.error(`Error calling LM Studio API: ${error.message}`);
+      throw error;
     }
   }
 
@@ -152,9 +187,8 @@ Expliquez également quelles informations cette requête va retourner.`,
       });
 
       const formattedPrompt = this.formatPrompt(
-        `Vous êtes un expert en SQL qui doit sélectionner la requête SQL la plus pertinente pour répondre à une question.
-         
-Question de l'utilisateur: "${userQuestion}"
+        `Vous êtes un expert en SQL qui doit sélectionner la requête SQL la plus pertinente pour répondre à une question.`,
+        `Question de l'utilisateur: "${userQuestion}"
 
 Voici des options de requêtes SQL existantes:
 ${optionsText}
@@ -168,20 +202,24 @@ Pour chaque option, évaluez si elle répond à la question posée, en tenant co
 
 Choisissez l'option la plus pertinente et retournez uniquement son numéro (1, 2, 3, 4 ou 5). 
 Si aucune option n'est pertinente, répondez "0".`,
-        "Quelle est l'option de requête SQL la plus pertinente pour cette question?",
       );
 
-      const response = await this.model.textGeneration({
-        model: this.modelName,
-        inputs: formattedPrompt,
-        parameters: {
-          ...this.modelConfig.parameters,
-          max_new_tokens: 10,
+      // Appeler l'API LM Studio avec des paramètres pour une réponse courte
+      const shortConfig = {
+        ...this.modelConfig,
+        max_tokens: 10,
+      };
+
+      const response = await axios.post(
+        `${this.getLmStudioUrl()}/completions`,
+        {
+          prompt: formattedPrompt,
+          ...shortConfig,
         },
-      });
+      );
 
       // Extraire le numéro de l'option choisie
-      const fullResponse = response.generated_text;
+      const fullResponse = response.data.choices[0].text || '';
       const match = fullResponse.match(/\d+/);
 
       if (!match || match[0] === '0') {
@@ -216,12 +254,76 @@ Si aucune option n'est pertinente, répondez "0".`,
     userInput: string,
   ): Promise<string> {
     const formattedPrompt = this.formatPrompt(context, userInput);
-    const response = await this.model.textGeneration({
-      model: this.modelName,
-      inputs: formattedPrompt,
-      parameters: this.modelConfig.parameters,
-    });
 
-    return response.generated_text;
+    try {
+      const response = await axios.post(
+        `${this.getLmStudioUrl()}/completions`,
+        {
+          prompt: formattedPrompt,
+          ...this.modelConfig,
+        },
+      );
+
+      let generatedText = response.data.choices[0].text || '';
+
+      // Nettoyer la sortie
+      if (generatedText.includes('<|im_end|>')) {
+        generatedText = generatedText.split('<|im_end|>')[0];
+      }
+
+      return generatedText.trim();
+    } catch (error) {
+      this.logger.error(`Error generating direct response: ${error.message}`);
+      throw error;
+    }
+  }
+
+  /**
+   * Récupère les questions similaires depuis le service RAG (méthode publique pour le contrôleur)
+   */
+  async getSimilarQuestionsPublic(question: string): Promise<RagQuestion[]> {
+    return this.getSimilarQuestions(question);
+  }
+
+  /**
+   * Demande au LLM de sélectionner la meilleure requête SQL parmi les options (méthode publique pour le contrôleur)
+   */
+  async selectBestMatchPublic(
+    userQuestion: string,
+    options: RagQuestion[],
+  ): Promise<RagResponse | null> {
+    return this.selectBestMatch(userQuestion, options);
+  }
+
+  /**
+   * Génère une explication de la requête SQL sélectionnée
+   */
+  async explainSqlQuery(
+    context: string,
+    userQuestion: string,
+    selectedQuery: RagResponse,
+  ): Promise<string> {
+    const formattedPrompt = this.formatPrompt(
+      `Vous êtes un assistant qui aide à expliquer des requêtes SQL et leurs résultats.`,
+      `Question: "${userQuestion}"
+       
+J'ai trouvé une requête SQL qui pourrait répondre à cette question:
+- Description: ${selectedQuery.description}
+- SQL: ${selectedQuery.sql}
+       
+Veuillez expliquer ce que fait cette requête SQL et comment elle répond à la question. Quelles informations cette requête va-t-elle retourner?`,
+    );
+
+    return this.callLmStudioApi(formattedPrompt);
+  }
+
+  /**
+   * Génère une réponse directe sans utiliser de RAG (méthode publique pour le contrôleur)
+   */
+  async generateDirectResponsePublic(
+    context: string,
+    userInput: string,
+  ): Promise<string> {
+    return this.generateDirectResponse(context, userInput);
   }
 }
