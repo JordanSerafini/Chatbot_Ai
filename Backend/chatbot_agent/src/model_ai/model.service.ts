@@ -40,7 +40,7 @@ export class ModelService {
   constructor(private readonly configService: ConfigService) {}
 
   async onModuleInit() {
-    const token = this.configService.get<string>('HUGGINGFACE_TOKEN');
+    const token = this.configService.get<string>('HUGGING_FACE_TOKEN');
     if (!token) {
       throw new Error('HUGGINGFACE_TOKEN is not set');
     }

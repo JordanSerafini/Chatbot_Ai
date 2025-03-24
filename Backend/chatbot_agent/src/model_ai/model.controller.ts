@@ -22,17 +22,23 @@ export class ModelController {
   constructor(private readonly modelService: ModelService) {}
 
   @Post('query')
-  async generateResponse(@Body() queryDto: QueryDto): Promise<QueryResponseDto> {
+  async generateResponse(
+    @Body() queryDto: QueryDto,
+  ): Promise<QueryResponseDto> {
     this.logger.log(`Received question: ${queryDto.question}`);
-    
+
     try {
       // Contexte par défaut si non fourni
-      const context = queryDto.context || 
+      const context =
+        queryDto.context ||
         "Vous êtes un assistant expert en gestion d'entreprise qui aide à répondre aux questions sur les clients, projets, factures et planning.";
-      
+
       // Obtenir la réponse du modèle
-      const response = await this.modelService.generateResponse(context, queryDto.question);
-      
+      const response = await this.modelService.generateResponse(
+        context,
+        queryDto.question,
+      );
+
       // Pour l'instant, nous retournons une réponse simplifiée
       return {
         question: queryDto.question,
@@ -44,4 +50,4 @@ export class ModelController {
       throw error;
     }
   }
-} 
+}
