@@ -97,65 +97,13 @@ ${userInput}</s>`;
         };
       }
 
-      this.logger.log('Selecting best match...');
-      const matchResult = await this.selectBestMatch(userInput, similarQuestions);
-
-      if (matchResult.noQuery) {
-        return {
-          question: userInput,
-          answer: matchResult.noQuery,
-          source: 'direct',
-          allOptions: similarQuestions,
-          confidence: 0
-        };
-      }
-
-      // Si on a une requête sélectionnée
-      if (matchResult.querySelected) {
-        const selectedQuestion = similarQuestions.find(q => q.metadata.sql === matchResult.querySelected);
-        
-        return {
-          question: userInput,
-          answer: selectedQuestion ? `J'ai trouvé une correspondance : ${selectedQuestion.question}` : "Requête sélectionnée",
-          source: 'sql',
-          selectedQuery: {
-            sql: matchResult.querySelected,
-            description: selectedQuestion?.metadata.description || '',
-            parameters: selectedQuestion?.metadata.parameters || []
-          },
-          allOptions: similarQuestions,
-          confidence: selectedQuestion ? (1 - selectedQuestion.distance) : 0.5
-        };
-      }
-
-      return {
-        question: userInput,
-        answer: "Pas de similarité trouvée",
-        source: 'direct',
-        allOptions: similarQuestions,
-        confidence: 0
-      };
-
-    } catch (error) {
-      this.logger.error(`Error in generateResponse: ${error.message}`);
-      throw error;
-    }
-  }
-
-  private async selectBestMatch(
-    userQuestion: string,
-    options: RagQuestion[],
-  ): Promise<any> {
-    try {
-      this.logger.log('Starting selectBestMatch process...');
+      // Préparer le prompt de sélection - sans le formatprompt qui ajoute un système assistant
       let optionsText = '';
-      options.forEach((option, index) => {
+      similarQuestions.forEach((option, index) => {
         optionsText += `${index + 1}) "${option.question}" (${(1 - option.distance).toFixed(2)})\n`;
       });
 
-      const formattedPrompt = this.formatPrompt(
-        `Vous êtes un système de sélection automatique qui doit choisir la question la plus similaire.`,
-        `QUESTION POSÉE: "${userQuestion}"
+      const rawSelectionPrompt = `QUESTION POSÉE: "${userInput}"
 
 QUESTIONS DISPONIBLES:
 ${optionsText}
@@ -167,7 +115,137 @@ RÈGLES:
    - 1 à 5 pour sélectionner une option
    - 0 si aucune option n'est suffisamment similaire
 
-VOTRE RÉPONSE (un seul chiffre):</s>`
+VOTRE RÉPONSE (un seul chiffre):`;
+
+      this.logger.log('Appel direct à LM Studio avec prompt de sélection');
+      this.logger.log(`Raw prompt: ${rawSelectionPrompt}`);
+      
+      // Configuration LM Studio pour obtenir un seul chiffre
+      const lmStudioConfig = {
+        max_tokens: 2,
+        temperature: 0.1,
+        top_p: 1,
+        frequency_penalty: 0,
+        presence_penalty: 0,
+        stop: ["\n", " ", ",", "."]
+      };
+      
+      try {
+        const lmStudioUrl = this.getLmStudioUrl();
+        
+        const response = await axios.post(
+          `${lmStudioUrl}/completions`,
+          {
+            prompt: rawSelectionPrompt,
+            ...lmStudioConfig,
+          },
+          {
+            timeout: 120000,
+          },
+        );
+
+        this.logger.log(`LM Studio response: ${JSON.stringify(response.data)}`);
+        
+        const fullResponse = response.data.choices[0].text.trim();
+        this.logger.log(`Raw selection response: "${fullResponse}"`);
+        
+        const match = fullResponse.match(/^[0-5]$/);
+        this.logger.log(`Matched selection: ${match ? match[0] : 'no match'}`);
+        
+        // Trier les options par distance
+        const sortedOptions = [...similarQuestions].sort((a, b) => a.distance - b.distance);
+        const other2Query = sortedOptions.slice(0, 2).map(opt => opt.metadata.sql);
+        
+        if (!match || match[0] === '0') {
+          this.logger.log('No sufficient match found');
+          return {
+            question: userInput,
+            answer: "pas de similarité",
+            source: 'direct',
+            allOptions: similarQuestions,
+            confidence: 0,
+            noQuery: "pas de similarité",
+            other2Query
+          };
+        }
+        
+        const selectedIndex = parseInt(match[0], 10) - 1;
+        if (selectedIndex < 0 || selectedIndex >= similarQuestions.length) {
+          this.logger.log(`Selected index ${selectedIndex} is out of bounds`);
+          return {
+            question: userInput,
+            answer: "pas de similarité",
+            source: 'direct',
+            allOptions: similarQuestions,
+            confidence: 0,
+            noQuery: "pas de similarité",
+            other2Query
+          };
+        }
+        
+        const selectedQuestion = similarQuestions[selectedIndex];
+        this.logger.log(`Selected question: ${selectedQuestion.question}`);
+        
+        return {
+          question: userInput,
+          answer: `J'ai trouvé une correspondance : ${selectedQuestion.question}`,
+          source: 'sql',
+          selectedQuery: {
+            sql: selectedQuestion.metadata.sql,
+            description: selectedQuestion.metadata.description,
+            parameters: selectedQuestion.metadata.parameters || []
+          },
+          allOptions: similarQuestions,
+          confidence: 1 - selectedQuestion.distance,
+          querySelected: selectedQuestion.metadata.sql,
+          other2Query: sortedOptions
+            .filter((_, index) => index !== selectedIndex)
+            .slice(0, 2)
+            .map(opt => opt.metadata.sql)
+        };
+        
+      } catch (error) {
+        this.logger.error(`Error in LM Studio selection: ${error.message}`);
+        // En cas d'erreur, on revient à la sélection par distance
+        const sortedOptions = [...similarQuestions].sort((a, b) => a.distance - b.distance);
+        const bestOption = sortedOptions[0];
+        const other2Query = sortedOptions.slice(1, 3).map(opt => opt.metadata.sql);
+        
+        this.logger.log(`Fallback to distance-based selection: ${bestOption.question}`);
+        
+        return {
+          question: userInput,
+          answer: `J'ai trouvé une correspondance : ${bestOption.question}`,
+          source: 'sql',
+          selectedQuery: {
+            sql: bestOption.metadata.sql,
+            description: bestOption.metadata.description,
+            parameters: bestOption.metadata.parameters || []
+          },
+          allOptions: similarQuestions,
+          confidence: 1 - bestOption.distance,
+          querySelected: bestOption.metadata.sql,
+          other2Query
+        };
+      }
+      
+    } catch (error) {
+      this.logger.error(`Error in generateResponse: ${error.message}`);
+      throw error;
+    }
+  }
+
+  private async selectBestMatch(
+    userQuestion: string,
+    options: RagQuestion[],
+    selectionPrompt: string
+  ): Promise<any> {
+    try {
+      this.logger.log('Starting selectBestMatch process...');
+
+      const formattedPrompt = this.formatPrompt(
+        `Vous êtes un système de sélection automatique qui doit choisir la question la plus similaire.`,
+        selectionPrompt
       );
 
       const shortConfig = {
@@ -180,6 +258,7 @@ VOTRE RÉPONSE (un seul chiffre):</s>`
         stop: ["\n", " ", ",", "."]
       };
 
+      this.logger.log('Sending prompt to LM Studio:', formattedPrompt);
       const response = await axios.post(
         `${this.getLmStudioUrl()}/completions`,
         {
@@ -191,7 +270,9 @@ VOTRE RÉPONSE (un seul chiffre):</s>`
         },
       );
 
+      this.logger.log('LM Studio response:', response.data);
       const fullResponse = response.data.choices[0].text.trim();
+      this.logger.log('Parsed response:', fullResponse);
       const match = fullResponse.match(/^[0-5]$/);
       
       // Trier les options par distance
@@ -385,7 +466,21 @@ Utilisez un format structuré avec des puces ou des paragraphes courts pour une 
     userQuestion: string,
     options: RagQuestion[],
   ): Promise<string> {
-    const bestMatch = await this.selectBestMatch(userQuestion, options);
+    const selectionPrompt = `QUESTION POSÉE: "${userQuestion}"
+
+QUESTIONS DISPONIBLES:
+${options.map((opt, i) => `${i + 1}) "${opt.question}" (${(1 - opt.distance).toFixed(2)})\n`).join('')}
+
+RÈGLES:
+1. Analysez la similarité sémantique entre la question posée et chaque option
+2. Tenez compte du score de similarité indiqué entre parenthèses
+3. Répondez UNIQUEMENT par un chiffre:
+   - 1 à 5 pour sélectionner une option
+   - 0 si aucune option n'est suffisamment similaire
+
+VOTRE RÉPONSE (un seul chiffre):`;
+
+    const bestMatch = await this.selectBestMatch(userQuestion, options, selectionPrompt);
     
     if (!bestMatch) {
       return 'pas de similarité';
@@ -401,7 +496,21 @@ Utilisez un format structuré avec des puces ou des paragraphes courts pour une 
     userQuestion: string,
     options: RagQuestion[],
   ): Promise<RagResponse | null> {
-    return this.selectBestMatch(userQuestion, options);
+    const selectionPrompt = `QUESTION POSÉE: "${userQuestion}"
+
+QUESTIONS DISPONIBLES:
+${options.map((opt, i) => `${i + 1}) "${opt.question}" (${(1 - opt.distance).toFixed(2)})\n`).join('')}
+
+RÈGLES:
+1. Analysez la similarité sémantique entre la question posée et chaque option
+2. Tenez compte du score de similarité indiqué entre parenthèses
+3. Répondez UNIQUEMENT par un chiffre:
+   - 1 à 5 pour sélectionner une option
+   - 0 si aucune option n'est suffisamment similaire
+
+VOTRE RÉPONSE (un seul chiffre):`;
+
+    return this.selectBestMatch(userQuestion, options, selectionPrompt);
   }
 
   /**
