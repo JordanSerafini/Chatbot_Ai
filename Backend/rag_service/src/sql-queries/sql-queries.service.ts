@@ -9,6 +9,7 @@ import {
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as crypto from 'crypto';
+import { ConfigService } from '@nestjs/config';
 
 // Fonction d'embedding vide pour satisfaire le typage
 class NoOpEmbeddingFunction implements IEmbeddingFunction {
@@ -53,9 +54,12 @@ export class SqlQueriesService {
   private collection: Collection;
   private hashCollection: Collection;
 
-  constructor() {
+  constructor(private configService: ConfigService) {
+    const chromaUrl =
+      this.configService.get<string>('CHROMA_URL') || 'http://ChromaDB:8000';
+    this.logger.log(`Connexion à ChromaDB sur : ${chromaUrl}`);
     this.client = new ChromaClient({
-      path: 'http://localhost:8000',
+      path: chromaUrl,
     });
     this.embeddingFunction = new NoOpEmbeddingFunction();
   }

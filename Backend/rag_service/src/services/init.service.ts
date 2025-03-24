@@ -15,7 +15,7 @@ export class InitService implements OnModuleInit {
     try {
       // Attendre un peu que ChromaDB soit complètement démarré
       await new Promise((resolve) => setTimeout(resolve, 3000));
-      
+
       try {
         // Vérifier si la collection existe et contient des données
         const count = await this.chromaService.getCount();
@@ -26,7 +26,8 @@ export class InitService implements OnModuleInit {
           );
 
           // Charger les requêtes SQL
-          const result = await this.sqlQueriesService.resetSqlQueriesCollection();
+          const result =
+            await this.sqlQueriesService.resetSqlQueriesCollection();
 
           this.logger.log(`Initialisation terminée: ${result.message}`);
         } else {
@@ -38,7 +39,8 @@ export class InitService implements OnModuleInit {
         // Si l'erreur concerne une collection inexistante, on l'initialise
         if (error.message && error.message.includes('does not exist')) {
           this.logger.log('Collection inexistante, initialisation...');
-          const result = await this.sqlQueriesService.resetSqlQueriesCollection();
+          const result =
+            await this.sqlQueriesService.resetSqlQueriesCollection();
           this.logger.log(`Initialisation forcée terminée: ${result.message}`);
         } else {
           throw error;

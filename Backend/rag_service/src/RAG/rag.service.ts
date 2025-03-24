@@ -19,7 +19,7 @@ export class RagService {
   constructor(private configService: ConfigService) {
     this.client = new ChromaClient({
       path:
-        this.configService.get<string>('CHROMA_URL') || 'http://localhost:8000',
+        this.configService.get<string>('CHROMA_URL') || 'http://ChromaDB:8000',
     });
     this.logger.log('Service RAG initialisé');
   }
@@ -31,6 +31,7 @@ export class RagService {
     }
 
     try {
+      // Pour la recherche en texte intégral, nous n'avons pas besoin d'une fonction d'embedding
       const collection = await this.client.getOrCreateCollection({
         name,
       });
@@ -45,8 +46,30 @@ export class RagService {
     }
   }
 
+  // Fonction utilitaire pour hacher un texte (identique à celle du ChromaService)
+  private hashText(text: string): string {
+    let hash = 0;
+    if (text.length === 0) return hash.toString();
+
+    for (let i = 0; i < text.length; i++) {
+      const char = text.charCodeAt(i);
+      hash = (hash << 5) - hash + char;
+      hash = hash & hash; // Conversion en un entier 32 bits
+    }
+
+    // Convertir en chaîne hexadécimale
+    const hexHash = (hash >>> 0).toString(16);
+    // Étendre le hash pour qu'il soit assez long
+    const extendedHash = hexHash
+      .repeat(Math.ceil(64 / hexHash.length))
+      .slice(0, 64);
+
+    return extendedHash;
+  }
+
   async createCollection(name: string) {
     try {
+      // Pour la recherche en texte intégral, nous n'avons pas besoin d'une fonction d'embedding
       const collection = await this.client.createCollection({
         name,
       });
@@ -193,6 +216,7 @@ export class RagService {
       return await collection.query({
         queryTexts: [query],
         nResults: limit,
+        where: {},
       });
     } catch (error) {
       this.logger.error(
@@ -520,14 +544,18 @@ export class RagService {
   }> {
     try {
       // Vérifier si nous avons des requêtes stockées
-      const result = await this.findSimilarPrompt('queries', question, 0.5);
+      const result = await this.findSimilarPrompt(
+        'questions_collection',
+        question,
+        0.5,
+      );
 
       if (result && result.found && result.metadata) {
         return {
           found: true,
           queryId: result.metadata.id || '',
-          sql: result.metadata.finalQuery || '',
-          description: result.metadata.questionReformulated || '',
+          sql: result.metadata.sql || '',
+          description: result.metadata.description || '',
           similarity: result.similarity || 0,
           parameters: result.metadata.parameters || [],
         };
@@ -536,7 +564,7 @@ export class RagService {
       // Si rien n'a été trouvé avec la question originale, essayer avec la reformulation
       if (reformulatedQuestion && reformulatedQuestion !== question) {
         const reformulatedResult = await this.findSimilarPrompt(
-          'queries',
+          'questions_collection',
           reformulatedQuestion,
           0.4,
         );
@@ -549,8 +577,8 @@ export class RagService {
           return {
             found: true,
             queryId: reformulatedResult.metadata.id || '',
-            sql: reformulatedResult.metadata.finalQuery || '',
-            description: reformulatedResult.metadata.questionReformulated || '',
+            sql: reformulatedResult.metadata.sql || '',
+            description: reformulatedResult.metadata.description || '',
             similarity: reformulatedResult.similarity || 0,
             parameters: reformulatedResult.metadata.parameters || [],
           };
@@ -626,19 +654,73 @@ export class RagService {
 
   async processQuestion(question: string): Promise<any> {
     try {
-      // 1. Recherche de prompts similaires dans la collection 'queries'
-      await this.findSimilarPrompt('queries', question, 0.75);
+      this.logger.log(`Traitement de la question: "${question}"`);
+
+      // Nettoyer la question pour une meilleure comparaison
+      const cleanedQuestion = this.cleanText(question);
+
+      // 1. Recherche de prompts similaires dans la collection 'questions_collection'
+      // Abaisser le seuil de similarité pour être plus permissif
+      const similarPrompt = await this.findSimilarPrompt(
+        'questions_collection',
+        cleanedQuestion,
+        0.4,
+      );
+      this.logger.log(
+        `Résultat de findSimilarPrompt: ${JSON.stringify(similarPrompt)}`,
+      );
 
       // 2. Chercher si une question similaire existe déjà dans la base de connaissances
+      // Passer la question originale et la question nettoyée pour maximiser les chances de correspondance
       const similarQuestion = await this.findSimilarStoredQuestion(
         question,
-        question,
+        cleanedQuestion,
+      );
+
+      this.logger.log(
+        `Résultat de findSimilarStoredQuestion: ${JSON.stringify(similarQuestion)}`,
       );
 
       // 3. Si une question similaire est trouvée avec une bonne confiance
       if (similarQuestion.found && similarQuestion.sql) {
+        // Calculer un score de confiance basé sur la similarité cosinus si possible
+        let confidence = similarQuestion.similarity || 0.7;
+
+        // Essayer d'améliorer le score de confiance avec d'autres métriques
+        const textualSimilarity = this.calculateSimilarity(
+          cleanedQuestion,
+          this.cleanText(similarQuestion.description || ''),
+        );
+
+        // Si nous avons des embeddings (vecteurs de représentation), utiliser la similarité cosinus
+        if (
+          similarPrompt &&
+          similarPrompt.found &&
+          similarPrompt.metadata &&
+          similarPrompt.metadata.embedding
+        ) {
+          // Récupérer un embedding de la question (simulation)
+          const questionEmbedding =
+            this.generateSimpleEmbedding(cleanedQuestion);
+          const storedEmbedding = similarPrompt.metadata.embedding;
+
+          // Calculer la similarité cosinus
+          const cosineSim = this.cosineSimilarity(
+            questionEmbedding,
+            storedEmbedding,
+          );
+
+          // Intégrer ce score dans notre confiance globale
+          confidence =
+            confidence * 0.5 + textualSimilarity * 0.2 + cosineSim * 0.3;
+          this.logger.log(`Similarité cosinus calculée: ${cosineSim}`);
+        } else {
+          // Sans embeddings, utiliser uniquement la similarité textuelle
+          confidence = confidence * 0.7 + textualSimilarity * 0.3;
+        }
+
         this.logger.log(
-          `Utilisation d'une requête SQL existante: ${similarQuestion.queryId}`,
+          `Utilisation d'une requête SQL existante: ${similarQuestion.queryId} (confiance: ${confidence})`,
         );
 
         // Utiliser la requête SQL existante au lieu d'en générer une nouvelle
@@ -649,11 +731,11 @@ export class RagService {
           storedQueryId: similarQuestion.queryId,
           similarity: similarQuestion.similarity,
           source: 'rag', // Indiquer que la requête vient du RAG et non de la génération
-          confidence: similarQuestion.similarity, // Utiliser la similarité comme score de confiance
+          confidence: confidence, // Utiliser la similarité comme score de confiance
         };
       }
 
-      // 4. Si aucune correspondance n'est trouvée, retourner un résultat par défaut
+      // Si aucune correspondance n'est trouvée, retourner un résultat par défaut
       this.logger.log(
         'Aucune requête existante trouvée, utilisation de la génération standard',
       );
@@ -670,6 +752,20 @@ export class RagService {
       );
       throw error;
     }
+  }
+
+  // Fonction simple pour générer un pseudo-embedding pour une question
+  private generateSimpleEmbedding(text: string): number[] {
+    // Créer un embedding simple basé sur le texte (pour démonstration)
+    const result = new Array(128).fill(0);
+
+    // Remplir le vecteur avec des valeurs dérivées du texte
+    const normalizedText = this.cleanText(text);
+    for (let i = 0; i < normalizedText.length && i < 128; i++) {
+      result[i % 128] = normalizedText.charCodeAt(i) / 255;
+    }
+
+    return result;
   }
 
   /**
