@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import axios from 'axios';
+import { HttpService } from '@nestjs/axios';
 
 interface RagQuestion {
   question: string;
@@ -25,15 +26,16 @@ export class ModelService {
   private readonly logger = new Logger(ModelService.name);
   // Configuration par défaut pour l'API LM Studio
   private readonly modelConfig = {
-    temperature: 0.2,
-    max_tokens: 1000,
-    top_p: 0.9,
-    top_k: 50,
-    repeat_penalty: 1.1,
-    stop: ['</s>'],
+    max_tokens: 2000,
+    temperature: 0.1,
+    top_p: 0.95,
+    stop: ['[/INST]', '</s>'], // Arrêter la génération au format Mistral
   };
 
-  constructor(private readonly configService: ConfigService) {}
+  constructor(
+    private httpService: HttpService,
+    private configService: ConfigService,
+  ) {}
 
   async onModuleInit() {
     this.logger.log('ModelService initialized for LM Studio');
@@ -68,13 +70,10 @@ export class ModelService {
   }
 
   private formatPrompt(context: string, userInput: string): string {
-    // Format compatible avec Mistral-Nemo
-    return `<|im_start|>system
-${context}<|im_end|>
-<|im_start|>user
-${userInput}<|im_end|>
-<|im_start|>assistant
-`;
+    // Format compatible avec DeepSeek
+    return `<s>[INST] ${context}
+
+${userInput} [/INST]`;
   }
 
   /**
@@ -127,18 +126,14 @@ Veuillez expliquer ce que fait cette requête SQL et comment elle répond à la 
       const lmStudioUrl = this.getLmStudioUrl();
       const response = await axios.post(`${lmStudioUrl}/completions`, {
         prompt,
-        model: 'mistral-nemo-instruct-2407', // Ou laissez vide pour utiliser le modèle actuellement chargé
+        model: 'deepseek-r1-distill-llama-8b',
         ...this.modelConfig,
       });
 
       // Extraire et retourner le texte généré sans les balises de fin
-      let generatedText = response.data.choices[0].text || '';
+      const generatedText = response.data.choices[0].text || '';
 
-      // Nettoyer la sortie (enlever les balises de fin potentielles)
-      if (generatedText.includes('<|im_end|>')) {
-        generatedText = generatedText.split('<|im_end|>')[0];
-      }
-
+      // Nettoyer la sortie
       return generatedText.trim();
     } catch (error) {
       this.logger.error(`Error calling LM Studio API: ${error.message}`);
