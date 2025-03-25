@@ -442,7 +442,8 @@ export class ModelService {
 
     try {
       if (!data || data.length === 0) {
-        return `Je n'ai trouvé aucun résultat pour votre question "${userQuestion}".`;
+        const dataType = 'Empty';
+        return `Je n'ai trouvé aucun résultat pour votre question "${userQuestion}".\n<!--dataType:${dataType}-->`;
       }
 
       // Détecter le type de données
@@ -457,28 +458,33 @@ export class ModelService {
       // Formater les données prétraitées pour le prompt
       const promptData = JSON.stringify(processedData, null, 2);
 
-      // Préparer le prompt simple avec juste la question et les données
+      // Préparer le prompt avec des instructions beaucoup plus précises et strictes
       const prompt = `
-Tu es un assistant d'entreprise pour une entreprise du secteur BTP. Réponds en français.
+Tu es un assistant d'entreprise pour une société BTP. Tu dois répondre en français de manière directe, factuelle et concise.
 
-Question de l'utilisateur: "${userQuestion}"
+Question : "${userQuestion}"
 
-Description des données disponibles: "${description}"
-
-Nombre de résultats: ${processedData.length}
-
-Données:
+Données disponibles (${processedData.length} résultats) :
 ${promptData}
 
-Réponds à la question de l'utilisateur en utilisant ces données de manière claire et directe, en format paragraphe. N'utilise pas de listes à puces. Utilise un ton naturel et conversationnel.`;
+CONSIGNES STRICTES:
+1. Tu dois analyser la question de l'utilisateur "${userQuestion}"
+2. Tu dois répondre directement à la question en utilisant les données de ${promptData}
+3. Ta réponse doit être naturelle et humaine, sans phrases d'introduction ou de conclusion
+4. Cite toutes les informations contenues dans ${promptData} dans ta réponse
+5. Ne fais aucune référence à ta réflexion interne ou aux instructions
+6. Ne répète jamais la même information
+7. N'utilise pas de formulations comme "il semble que", "d'après les données", etc.
+
+Ta réponse DOIT commencer directement par le fait principal, sans phrase d'introduction.`;
 
       // Envoyer le prompt à LM Studio
       const response = await axios.post(
         `${this.getLmStudioUrl()}/completions`,
         {
           prompt,
-          max_tokens: 500,
-          temperature: 0.7,
+          max_tokens: 1500,
+          temperature: 1,
           top_p: 0.9,
           frequency_penalty: 0.3,
         },
@@ -489,12 +495,12 @@ Réponds à la question de l'utilisateur en utilisant ces données de manière c
       let generatedParagraph = response.data.choices[0].text.trim();
       generatedParagraph = this.cleanupResponse(generatedParagraph);
 
-      // Combiner le paragraphe explicatif avec les données formatées et le type de données
+      // Combiner le paragraphe explicatif avec les données formatées
       const finalResponse = `${generatedParagraph}\n\n${formattedDataString}`;
 
       this.logger.log(`Generated response with explanation and formatted data`);
 
-      // Ajouter un champ JSON invisible pour le type de données
+      // Ajouter un commentaire HTML invisible pour le type de données - TOUJOURS PRÉSENT
       const responseWithType = `${finalResponse}\n<!--dataType:${dataType}-->`;
 
       return responseWithType;
@@ -504,6 +510,7 @@ Réponds à la question de l'utilisateur en utilisant ces données de manière c
       // Fallback simple avec les données formatées
       const formattedData = this.formatDataForDisplay(data);
       const dataType = this.detectDataType(data);
+      // S'assurer que le dataType est toujours présent
       return `Voici les informations concernant votre demande sur ${description.toLowerCase()}:\n\n${formattedData}\n<!--dataType:${dataType}-->`;
     }
   }
@@ -572,137 +579,6 @@ Réponds à la question de l'utilisateur en utilisant ces données de manière c
     }
 
     return 'Generic';
-  }
-
-  /**
-   * Génère un résumé structuré à partir des données
-   */
-  private generateSummaryFromData(
-    data: any[],
-    question: string,
-    description: string,
-  ): string {
-    try {
-      // Détecter si ce sont des données de TVA/factures ou de chantiers
-      const isTvaData = data.length > 0 && data[0].month_name !== undefined;
-      const isProjectData =
-        data.length > 0 &&
-        data[0].name !== undefined &&
-        data[0].start_date !== undefined;
-
-      // Cas des données de TVA par mois
-      if (isTvaData) {
-        // Filtrer les données pour 2025
-        const data2025 = data.filter(
-          (item) => item.month_name && item.month_name.includes('2025'),
-        );
-
-        // Calculer le total pour 2025
-        let totalAmount = 0;
-        let totalCount = 0;
-
-        if (data2025.length > 0) {
-          data2025.forEach((item) => {
-            totalAmount += parseFloat(item.total_tva || '0');
-            totalCount += parseInt(item.invoice_count || '0', 10);
-          });
-        }
-
-        // Construire la réponse
-        let summary = '';
-
-        if (question.toLowerCase().includes('2025')) {
-          summary = `Pour l'année 2025, le montant cumulé de TVA s'élève à ${totalAmount.toLocaleString(
-            'fr-FR',
-            {
-              minimumFractionDigits: 2,
-              maximumFractionDigits: 2,
-            },
-          )} € réparti sur ${totalCount} factures. `;
-        } else {
-          summary = `Sur les 12 derniers mois, nous avons enregistré ${data.length} périodes avec un total de TVA variable selon ${description}. `;
-        }
-
-        // Ajouter des détails sur le mois le plus important
-        const maxMonth = [...data].sort(
-          (a, b) =>
-            parseFloat(b.total_tva || '0') - parseFloat(a.total_tva || '0'),
-        )[0];
-
-        if (maxMonth) {
-          summary += `${maxMonth.month_name.trim()} est la période la plus importante avec ${parseFloat(
-            maxMonth.total_tva,
-          ).toLocaleString('fr-FR', {
-            minimumFractionDigits: 2,
-            maximumFractionDigits: 2,
-          })} € de TVA sur ${maxMonth.invoice_count} facture(s). `;
-        }
-
-        // Mentionner les anomalies si présentes
-        const negativeMonths = data.filter(
-          (item) => parseFloat(item.total_tva || '0') < 0,
-        );
-        if (negativeMonths.length > 0) {
-          summary += `Attention, ${negativeMonths.length} mois présente(nt) des montants négatifs, notamment ${negativeMonths[0].month_name.trim()} avec ${parseFloat(
-            negativeMonths[0].total_tva,
-          ).toLocaleString('fr-FR', {
-            minimumFractionDigits: 2,
-            maximumFractionDigits: 2,
-          })} €.`;
-        }
-
-        return summary.trim();
-      }
-      // Cas des données de chantiers/projets
-      else if (isProjectData) {
-        // Formatage des dates
-        const formattedProjects = data.map((project) => {
-          const date = new Date(project.start_date);
-          return {
-            ...project,
-            formatted_date: date.toLocaleDateString('fr-FR'),
-          };
-        });
-
-        // Construire la réponse
-        let summary = '';
-
-        // Résumé du nombre et période
-        if (question.toLowerCase().includes('mois')) {
-          const currentMonth = new Date().toLocaleString('fr-FR', {
-            month: 'long',
-          });
-          summary = `Ce mois de ${currentMonth}, ${data.length} chantier${data.length > 1 ? 's' : ''} ${data.length > 1 ? 'sont prévus' : 'est prévu'} selon ${description}. `;
-        } else {
-          summary = `Actuellement, ${data.length} projet${data.length > 1 ? 's sont planifiés' : ' est planifié'} selon ${description}. `;
-        }
-
-        // Ajouter les noms des projets si peu nombreux
-        if (data.length <= 3) {
-          const projectNames = formattedProjects.map((p) => p.name);
-          summary += `Il s'agit de ${projectNames.join(', ')}. `;
-        }
-
-        // Ajouter la ville si tous les projets sont dans la même ville
-        const cities = [
-          ...new Set(
-            formattedProjects.filter((p) => p.city).map((p) => p.city),
-          ),
-        ];
-        if (cities.length === 1) {
-          summary += `Tous ces chantiers sont situés à ${cities[0]}. `;
-        }
-
-        return summary.trim();
-      }
-      // Cas par défaut
-      else {
-        return `Nous avons trouvé ${data.length} résultat(s) concernant ${description.toLowerCase()}.`;
-      }
-    } catch (error) {
-      this.logger.error(`Error in generateSummaryFromData: ${error.message}`);
-      return `Les données montrent un total de ${data.length} résultat(s) concernant ${description.toLowerCase()}.`;
-    }
   }
 
   /**
@@ -812,50 +688,120 @@ Réponds à la question de l'utilisateur en utilisant ces données de manière c
    * Nettoie la réponse de tout contenu non désiré
    */
   private cleanupResponse(response: string): string {
-    // Supprimer le texte en anglais et les artefacts de pensée
-    let cleaned = response
-      // Supprimer les balises think et les commentaires
-      .replace(/<think>[\s\S]*?<\/think>/gi, '')
-      .replace(/\[.*?\]/g, '')
-      .replace(/\*\*(.*?)\*\*/g, '$1')
-      .replace(/^[\s-_*]+|[\s-_*]+$/gm, '')
+    // Vérifier si la réponse est un JSON brut
+    const isJsonLike = /^\s*[{[]/.test(response);
+    if (isJsonLike) {
+      return ''; // Renvoyer une chaîne vide pour forcer la génération d'un résumé côté frontend
+    }
 
-      // Supprimer les préfixes et suffixes courants dans les réponses
-      .replace(/^(Réponse|RÉPONSE)\s*:/i, '')
-      .replace(/^"(.+)"$/s, '$1')
-      .replace(/Taquin,.*$/gm, '')
-      .replace(/le \d+ \w+ 2 \d{3}/g, '')
+    // Enlever d'abord les guillemets qui entourent toute la réponse
+    let cleaned = response.replace(/^"(.*)"$/s, '$1');
+    
+    // Supprimer les doublons de phrases - étape 1: normaliser
+    const sentences = cleaned.split(/[.!?]\s+/).filter((s) => s.length > 0);
+    const uniqueSentences = [...new Set(sentences)];
+    cleaned = uniqueSentences.join('. ') + (cleaned.endsWith('.') ? '' : '.');
+    
+    // Liste des patterns à supprimer
+    const patternsToRemove = [
+      // Métadiscours et réflexions
+      /Sois respectueux.*\./gi,
+      /Je dois donc structurer.*\./gi,
+      /Bon, maintenant je dois.*\./gi,
+      /Je vais donc afficher.*\./gi,
+      /D'après les données.*\./gi,
+      /Donc je vais lister.*\./gi,
+      /Ensuite j'ai à conclure.*\./gi,
+      /^(D'accord|OK|Bien|Je comprends),.*$/gim,
+      // Phrases d'analyse et de réflexion
+      /Donc, si chaque client.*$/gim,
+      /^Peut-être que les données.*$/gim,
+      /^Par exemple,.*$/gim,
+      /^Si cela est le cas.*$/gim,
+      /^Aucun client ne peut.*$/gim,
+      /^Assure-toi que.*$/gim,
+      /^Cela semble bizarre.*$/gim,
+      // Instructions et méta-commentaires
+      /^Tout d'abord,.*$/gim,
+      /^Ensuite,.*$/gim,
+      /^Enfin,.*$/gim,
+      /^Incluez.*$/gim,
+      /^Pour répondre à.*$/gim,
+      /^Il faut mentionner.*$/gim,
+      /^Voici.*$/gim,
+      /^Donc, d'après.*$/gim,
+      /^Après analyse.*$/gim,
+      /^Ci-dessous.*$/gim,
+      /^Pourriez-vous me fournir.*$/gim,
+      // Balises et styles
+      /<think>[\s\S]*?<\/think>/gi,
+      /\[.*?\]/g,
+      /\*\*(.*?)\*\*/g,
+      // Préfixes et suffixes
+      /^(Réponse|RÉPONSE)\s*:/i,
+      /Taquin,.*$/gm,
+      /le \d+ \w+ 2\d{3}/g,
+      // Phrases de réflexion en anglais et français
+      /Okay,.*$/g,
+      /^.*\b(think|First|Let|Ok|question|Looking|The|This)\b.*$/gim,
+      /^Je me demande.*$/gim,
+      /^Je me souviens.*$/gim,
+      /^Je vous (explique|informe).*$/gim,
+      // Structure de données et émojis
+      /^\d+\.\s+id:.*\|.*$/gim,
+      /^Posez votre question\.\.\.$/gim,
+      /^Envoyer.*$/gim,
+      // Phrases coupées ou incomplètes
+      /^Il semble que plusieurs clients.*$/gim,
+      /^En fonction des.*$/gim,
+      // Emojis et champs spéciaux
+      /^👥.*$/gim,
+      /^📧.*$/gim,
+      /^📞.*$/gim,
+      /^ID:.*$/gim,
+      /^Clients$/gim,
+      /^\d+ résultats$/gim,
+    ];
 
-      // Supprimer les phrases de réflexion en anglais
-      .replace(/Okay,.*$/g, '')
-      .replace(/Let me.*$/gi, '')
-      .replace(/First,.*$/gi, '')
-      .replace(/I need to.*$/gi, '')
-      .replace(/For the user.*$/gi, '')
-      .replace(/In response to.*$/gi, '')
-      .replace(/In this case.*$/gi, '')
-      .replace(/Question de.*$/gi, '')
-      .replace(/Données disponibles.*$/gis, '')
-      .replace(/Pour l("|')utilisateur.*$/gi, '')
+    // Appliquer tous les patterns de nettoyage
+    patternsToRemove.forEach((pattern) => {
+      cleaned = cleaned.replace(pattern, '');
+    });
 
-      // Supprimer les lignes avec des mots clés anglais ou métadiscours
-      .replace(
-        /^.*\b(think|First|Let|Ok|question|Looking|The|This)\b.*$/gim,
-        '',
-      )
-      .replace(/^Je me demande.*$/gim, '')
-      .replace(/^Je me souviens.*$/gim, '')
-      .replace(/^Je vous (explique|informe).*$/gim, '');
+    // Nettoyer les phrases de type analytique
+    const phrasesToClean = [
+      /Il y a \d+ (résultats?|données?).*$/gim,
+      /C'est une.*$/gim,
+      /Comme tous les clients.*$/gim,
+      /Comme aucun client.*$/gim,
+      /Il semble que tous les clients.*$/gim,
+      /Il semble que les.*$/gim,
+      /Si vous souhaitez identifier.*$/gim,
+      /Voici quelques exemples.*$/gim,
+      /Voici quelques noms d'exemple.*$/gim,
+    ];
 
-    // Supprimer les lignes vides multiples
-    cleaned = cleaned.replace(/\n{3,}/g, '\n\n');
+    phrasesToClean.forEach((pattern) => {
+      cleaned = cleaned.replace(pattern, '');
+    });
 
-    // Nettoyer les séquences inutiles
-    cleaned = cleaned.replace(/Il y a \d+ (résultats?|données?).*$/gim, '');
-    cleaned = cleaned.replace(/C'est une.*$/gim, '');
+    // Supprimer les répétitions
+    cleaned = cleaned.replace(/(.*?)\. \1\.?/gi, '$1.');
+
+    // Supprimer les lignes vides multiples et nettoyer
+    cleaned = cleaned.replace(/\n{2,}/g, '\n');
+    cleaned = cleaned.replace(/^[\s\-_*]+$/gm, '');
+    cleaned = cleaned.replace(/^(👥|📧|📞)$/gmu, '');
+    cleaned = cleaned.replace(/^ID:.*$/gim, '');
 
     // Mettre en forme les nombres dans le texte
     cleaned = cleaned.replace(/(\d+)(\d{3})/g, '$1 $2');
+
+    // Préserver les commentaires HTML invisibles de dataType
+    const dataTypeMatch = response.match(/<!--dataType:(.*?)-->/);
+    if (dataTypeMatch) {
+      cleaned = `${cleaned.trim()}\n<!--dataType:${dataTypeMatch[1]}-->`;
+    }
 
     return cleaned.trim();
   }
