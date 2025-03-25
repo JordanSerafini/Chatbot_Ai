@@ -257,12 +257,23 @@ export class ChromaService implements OnModuleInit {
 
   // Fonction qui calcule un score de similarité entre deux textes
   private calculateTextualSimilarity(text1: string, text2: string): number {
-    // 1. Calcul Jaccard Similarity basé sur les mots
+    // Normaliser les textes
+    const normalized1 = text1
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '');
+
+    const normalized2 = text2
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '');
+
+    // 1. Calcul Jaccard Similarity basé sur les mots (filtrer les mots courts)
     const words1 = new Set(
-      text1.split(/\s+/).filter((word) => word.length > 2),
+      normalized1.split(/\s+/).filter((word) => word.length > 2),
     );
     const words2 = new Set(
-      text2.split(/\s+/).filter((word) => word.length > 2),
+      normalized2.split(/\s+/).filter((word) => word.length > 2),
     );
 
     const intersection = new Set(
@@ -271,50 +282,200 @@ export class ChromaService implements OnModuleInit {
     const union = new Set([...words1, ...words2]);
 
     // Calculer l'indice Jaccard
-    const jaccardSimilarity = intersection.size / union.size;
+    const jaccardSimilarity =
+      union.size > 0 ? intersection.size / union.size : 0;
 
-    // 2. Vérifier s'il y a des mots exacts importants en commun
-    const importantWordsCount = this.countImportantWordsMatches(text1, text2);
+    // 2. Importance accrue des mots-clés pertinents pour le métier
+    const keywordScore = this.calculateKeywordImportance(
+      normalized1,
+      normalized2,
+    );
 
-    // 3. Combinaison des scores (distance plus petite = meilleure correspondance)
-    return 1 - (jaccardSimilarity * 0.7 + (importantWordsCount > 0 ? 0.3 : 0));
+    // 3. Vérifier les intentions (devis, factures, projets, etc.)
+    const intentScore = this.matchIntent(normalized1, normalized2);
+
+    // 4. Similarité des paramètres (dates, montants, statuts, etc.)
+    const paramScore = this.matchParameters(normalized1, normalized2);
+
+    // Combinaison des scores (distance plus petite = meilleure correspondance)
+    // Note: les poids sont ajustés pour donner plus d'importance aux intentions et mots-clés
+    const weightedScore =
+      1 -
+      (jaccardSimilarity * 0.3 +
+        keywordScore * 0.3 +
+        intentScore * 0.3 +
+        paramScore * 0.1);
+
+    return Math.max(0, Math.min(1, weightedScore));
   }
 
-  // Compte le nombre de mots clés importants en commun
-  private countImportantWordsMatches(text1: string, text2: string): number {
-    // Liste de mots clés importants pour le domaine
-    const importantKeywords = [
+  // Évalue l'importance des mots-clés du domaine
+  private calculateKeywordImportance(text1: string, text2: string): number {
+    // Liste des mots-clés importants pour le domaine BTP
+    const businessKeywords = [
       'client',
       'clients',
-      'actif',
-      'actifs',
-      'actives',
       'projet',
       'projets',
+      'chantier',
+      'chantiers',
       'facture',
       'factures',
       'devis',
+      'proposition',
+      'propositions',
+      'refusé',
+      'refusée',
+      'refusés',
+      'refusées',
+      'rejeté',
+      'rejetée',
+      'accepté',
+      'acceptée',
+      'validé',
+      'validée',
+      'matériaux',
+      'équipement',
+      'équipe',
       'planning',
-      'budget',
-      'budgets',
-      'cours',
-      'terminés',
-      'terminé',
-      'retard',
-      'impayé',
-      'impayés',
-      'liste',
+      'récent',
+      'récents',
+      'récente',
+      'récentes',
+      'entreprise',
+      'personnel',
+      'staff',
+      'employé',
+      'employés',
     ];
 
-    // Compter les correspondances
-    let count = 0;
-    for (const keyword of importantKeywords) {
-      if (text1.includes(keyword) && text2.includes(keyword)) {
-        count++;
+    // Compter les correspondances et leur donner un poids plus élevé
+    let score = 0;
+    let totalMatchableKeywords = 0;
+
+    for (const keyword of businessKeywords) {
+      const inText1 = text1.includes(keyword);
+      const inText2 = text2.includes(keyword);
+
+      if (inText1) {
+        totalMatchableKeywords++;
+        if (inText2) {
+          // Pondération plus forte pour les termes métier spécifiques
+          if (
+            [
+              'refusé',
+              'refusée',
+              'refusés',
+              'refusées',
+              'rejeté',
+              'rejetée',
+            ].includes(keyword)
+          ) {
+            score += 3;
+          } else if (
+            ['devis', 'proposition', 'propositions'].includes(keyword)
+          ) {
+            score += 2;
+          } else {
+            score += 1;
+          }
+        }
       }
     }
 
-    return count;
+    // Normaliser le score entre 0 et 1
+    return totalMatchableKeywords > 0
+      ? Math.min(1, score / totalMatchableKeywords)
+      : 0;
+  }
+
+  // Détecte si les deux textes partagent la même intention
+  private matchIntent(text1: string, text2: string): number {
+    // Catégories d'intentions principales
+    const intentions = [
+      { type: 'devis', terms: ['devis', 'proposition', 'offre', 'cotation'] },
+      {
+        type: 'facture',
+        terms: ['facture', 'paiement', 'règlement', 'impayé'],
+      },
+      {
+        type: 'projet',
+        terms: ['projet', 'chantier', 'travaux', 'construction'],
+      },
+      {
+        type: 'client',
+        terms: ['client', 'contact', 'personne', 'entreprise'],
+      },
+      {
+        type: 'planning',
+        terms: ['planning', 'calendrier', 'agenda', 'emploi du temps'],
+      },
+      {
+        type: 'status',
+        terms: ['refusé', 'rejeté', 'accepté', 'validé', 'en cours', 'terminé'],
+      },
+    ];
+
+    // Vérifier si les deux textes partagent les mêmes intentions
+    let maxScore = 0;
+
+    for (const intent of intentions) {
+      const inText1 = intent.terms.some((term) => text1.includes(term));
+      const inText2 = intent.terms.some((term) => text2.includes(term));
+
+      if (inText1 && inText2) {
+        // Les intentions "status" avec termes exacts sont plus importantes
+        if (intent.type === 'status') {
+          for (const term of intent.terms) {
+            if (text1.includes(term) && text2.includes(term)) {
+              maxScore = Math.max(maxScore, 1.0);
+              break;
+            }
+          }
+        } else {
+          maxScore = Math.max(maxScore, 0.8);
+        }
+      }
+    }
+
+    return maxScore;
+  }
+
+  // Détecte si les deux textes font référence aux mêmes types de paramètres
+  private matchParameters(text1: string, text2: string): number {
+    const paramPatterns = [
+      {
+        type: 'date',
+        pattern:
+          /\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b|\b\d{4}[/-]\d{1,2}[/-]\d{1,2}\b/,
+      },
+      { type: 'montant', pattern: /\b\d+([,.]\d{1,2})?\s*(€|euros?)\b/ },
+      {
+        type: 'id',
+        pattern: /\b[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}\b/i,
+      },
+      {
+        type: 'ville',
+        pattern: /\b(?:à|de|sur|pour)\s+([A-Z][a-zéèêàâôûùïüç-]+)\b/,
+      },
+    ];
+
+    let matchCount = 0;
+    let totalParams = 0;
+
+    for (const param of paramPatterns) {
+      const inText1 = param.pattern.test(text1);
+      const inText2 = param.pattern.test(text2);
+
+      if (inText1 || inText2) {
+        totalParams++;
+        if (inText1 && inText2) {
+          matchCount++;
+        }
+      }
+    }
+
+    return totalParams > 0 ? matchCount / totalParams : 0;
   }
 
   async deleteCollection() {
