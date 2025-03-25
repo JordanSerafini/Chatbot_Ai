@@ -8,7 +8,6 @@ import {
 } from '@nestjs/common';
 import { ModelService } from './model.service';
 import { QuerierService } from '../bdd_querier/querier.service';
-import { TextProcessorService } from './text-processor.service';
 import { HttpService } from '@nestjs/axios';
 import { firstValueFrom } from 'rxjs';
 
@@ -60,7 +59,6 @@ export class ModelController {
   constructor(
     private readonly modelService: ModelService,
     private readonly querierService: QuerierService,
-    private readonly textProcessorService: TextProcessorService,
     private readonly httpService: HttpService,
   ) {}
 
@@ -129,7 +127,7 @@ export class ModelController {
             description: response.querySelected.description,
           },
           alternativeQuestions: otherQueries,
-          textResponse: this.textProcessorService.generateTextResponse(
+          textResponse: await this.modelService.generateNaturalResponse(
             response.querySelected.description,
             sqlResult.result,
             queryDto.question,
@@ -205,7 +203,7 @@ export class ModelController {
           },
 
           // Réponse textuelle pour l'interface utilisateur
-          textResponse: this.textProcessorService.generateTextResponse(
+          textResponse: await this.modelService.generateNaturalResponse(
             ragResponse.querySelected.description,
             response.data.data || [],
             queryDto.question,

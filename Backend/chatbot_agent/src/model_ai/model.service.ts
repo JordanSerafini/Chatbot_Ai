@@ -421,4 +421,68 @@ INSTRUCTIONS DÉTAILLÉES:
 RÉPONSE:
 Réponds uniquement par le numéro de l'option choisie (1, 2, 3, etc.) sans aucune explication ni justification.`;
   }
+
+  async generateNaturalResponse(
+    description: string,
+    data: any[],
+    userQuestion: string,
+  ): Promise<string> {
+    this.logger.log(
+      `Generating natural language response for query: "${userQuestion}"`,
+    );
+
+    try {
+      if (!data || data.length === 0) {
+        return `Je n'ai trouvé aucun résultat pour votre question "${userQuestion}".`;
+      }
+
+      // Formater les données pour le prompt
+      const formattedData = JSON.stringify(data, null, 2);
+
+      // Préparer le prompt pour LM Studio
+      const prompt = `
+Tu es un assistant d'entreprise spécialisé dans la construction et le BTP. Tu dois répondre en français à une question d'un utilisateur en te basant sur des données SQL.
+
+Question de l'utilisateur: "${userQuestion}"
+
+Description de la requête SQL: "${description}"
+
+Résultats de la requête SQL (${data.length} résultats):
+${formattedData}
+
+En tant qu'assistant, génère une réponse concise mais complète qui:
+1. Commence par une phrase d'introduction qui répond directement à la question
+2. Présente les informations importantes des résultats de manière claire et organisée
+3. Si pertinent, fournis un résumé ou une analyse des données (tendances, points importants)
+4. Utilise un ton professionnel mais conversationnel
+5. Ne mentionne pas que tu utilises des "données SQL" ou des "résultats de requête" dans ta réponse
+
+Ta réponse:`;
+
+      // Envoyer le prompt à LM Studio
+      const response = await axios.post(
+        `${this.getLmStudioUrl()}/completions`,
+        {
+          prompt,
+          max_tokens: 1000,
+          temperature: 0.7,
+          top_p: 0.95,
+        },
+        { timeout: 60000 },
+      );
+
+      // Extraire et retourner la réponse générée
+      const generatedResponse = response.data.choices[0].text.trim();
+      this.logger.log(
+        `Generated natural response of length: ${generatedResponse.length}`,
+      );
+
+      return generatedResponse;
+    } catch (error) {
+      this.logger.error(`Error generating natural response: ${error.message}`);
+
+      // Fallback à une réponse simple en cas d'erreur
+      return `J'ai trouvé ${data.length} résultat(s) pour votre recherche sur "${description.toLowerCase()}".`;
+    }
+  }
 }
