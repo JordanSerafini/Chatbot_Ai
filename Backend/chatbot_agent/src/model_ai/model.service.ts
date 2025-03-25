@@ -390,6 +390,7 @@ export class ModelService {
   private prepareSelectionPrompt(
     question: string,
     options: RagQuestion[],
+
   ): string {
     // Générer le texte des options avec leur description complète
     let optionsText = '';
@@ -420,5 +421,6 @@ INSTRUCTIONS DÉTAILLÉES:
 
 RÉPONSE:
 Réponds uniquement par le numéro de l'option choisie (1, 2, 3, etc.) sans aucune explication ni justification.`;
+
   }
 }
