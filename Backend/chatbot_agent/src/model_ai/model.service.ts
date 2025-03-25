@@ -7,7 +7,11 @@ interface RagQuestion {
   metadata: {
     sql: string;
     description: string;
-    parameters: any[];
+    parameters: {
+      name: string;
+      description: string;
+      default?: string;
+    }[];
   };
   distance: number;
 }
@@ -72,6 +76,135 @@ export class ModelService {
     }
   }
 
+  private extractParametersFromQuestion(
+    question: string,
+    parameters: any[],
+  ): { [key: string]: string } {
+    const extractedParams: { [key: string]: string } = {};
+
+    if (!parameters || parameters.length === 0) {
+      return extractedParams;
+    }
+
+    const normalizedQuestion = question
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '');
+
+    parameters.forEach((param) => {
+      const paramName = param.name;
+      let paramValue: string | undefined;
+
+      switch (paramName) {
+        case 'CLIENT': {
+          const clientMatches = normalizedQuestion.match(
+            /(?:client|pour|de)\s+([a-z\s]+?)(?:\s|$)/i,
+          );
+          if (clientMatches) {
+            paramValue = clientMatches[1].trim();
+          }
+          break;
+        }
+        case 'DATE': {
+          const dateMatches = normalizedQuestion.match(
+            /\d{4}-\d{2}-\d{2}|\d{2}\/\d{2}\/\d{4}/,
+          );
+          if (dateMatches) {
+            paramValue = dateMatches[0];
+          }
+          break;
+        }
+        case 'PERIOD': {
+          const periodMatches = normalizedQuestion.match(
+            /\b(mois|trimestre|annee|year|month|quarter)\b/i,
+          );
+          if (periodMatches) {
+            const periodMap: { [key: string]: string } = {
+              mois: 'month',
+              trimestre: 'quarter',
+              annee: 'year',
+              year: 'year',
+              month: 'month',
+              quarter: 'quarter',
+            };
+            paramValue = periodMap[periodMatches[1].toLowerCase()];
+          }
+          break;
+        }
+        case 'STATUS': {
+          const statusMatches = normalizedQuestion.match(
+            /\b(brouillon|envoyee?|payee?|en[_\s]retard|annulee?)\b/i,
+          );
+          if (statusMatches) {
+            paramValue = statusMatches[1]
+              .toLowerCase()
+              .replace('envoyee', 'envoyée')
+              .replace('payee', 'payée')
+              .replace('annulee', 'annulée');
+          }
+          break;
+        }
+        case 'METHOD': {
+          const methodMatches = normalizedQuestion.match(
+            /\b(carte|cheque|virement|especes|prelevement)\b/i,
+          );
+          if (methodMatches) {
+            paramValue = methodMatches[1].toLowerCase();
+          }
+          break;
+        }
+        case 'AMOUNT': {
+          const amountMatches = normalizedQuestion.match(
+            /(\d+([.,]\d{1,2})?)\s*(euros?|€)/i,
+          );
+          if (amountMatches) {
+            paramValue = amountMatches[1].replace(',', '.');
+          }
+          break;
+        }
+        case 'DAYS': {
+          const daysMatches = normalizedQuestion.match(/(\d+)\s*jours?/i);
+          if (daysMatches) {
+            paramValue = daysMatches[1];
+          }
+          break;
+        }
+        default: {
+          const genericMatches = normalizedQuestion.match(
+            new RegExp(`${paramName.toLowerCase()}\\s*:?\\s*([\\w\\s-]+)`, 'i'),
+          );
+          if (genericMatches) {
+            paramValue = genericMatches[1].trim();
+          }
+        }
+      }
+
+      if (!paramValue && param.default) {
+        paramValue = param.default;
+      }
+
+      if (paramValue) {
+        extractedParams[paramName] = paramValue;
+      }
+    });
+
+    return extractedParams;
+  }
+
+  private replaceParametersInQuery(
+    sql: string,
+    params: { [key: string]: string },
+  ): string {
+    let modifiedSql = sql;
+
+    Object.entries(params).forEach(([key, value]) => {
+      const paramRegex = new RegExp(`\\[${key}\\]`, 'g');
+      modifiedSql = modifiedSql.replace(paramRegex, value);
+    });
+
+    return modifiedSql;
+  }
+
   async generateResponse(question: string): Promise<RagResponse> {
     this.logger.log(`Starting generateResponse with question: ${question}`);
     try {
@@ -95,7 +228,17 @@ export class ModelService {
       const bestMatch = this.selectBestMatch(question, similarQuestions);
       this.logger.log(`Selected best match: ${bestMatch.question}`);
 
-      // 3. Prepare other options avec toutes les informations
+      // 3. Extraire et remplacer les paramètres dans la requête SQL
+      const extractedParams = this.extractParametersFromQuestion(
+        question,
+        bestMatch.metadata.parameters || [],
+      );
+      const modifiedSql = this.replaceParametersInQuery(
+        bestMatch.metadata.sql,
+        extractedParams,
+      );
+
+      // 4. Prepare other options avec toutes les informations
       const otherQueriesDetails = similarQuestions
         .filter((q) => q.question !== bestMatch.question)
         .slice(0, 2)
@@ -107,10 +250,10 @@ export class ModelService {
           parameters: q.metadata.parameters || [],
         }));
 
-      // 4. Return response avec structure complète
+      // 5. Return response avec structure complète et SQL modifié
       return {
         querySelected: {
-          sql: bestMatch.metadata.sql,
+          sql: modifiedSql,
           description: bestMatch.metadata.description,
           question: bestMatch.question,
           distance: bestMatch.distance,
@@ -164,80 +307,7 @@ export class ModelService {
     }
   }
 
-  private selectBestMatch(
-    question: string,
-    options: RagQuestion[],
-  ): RagQuestion {
-    try {
-      this.logger.log(`Comparaison directe avec question: "${question}"`);
-
-      // Normaliser la question de l'utilisateur
-      const normalizedUserQuestion = question
-        .toLowerCase()
-        .normalize('NFD')
-        .replace(/[\u0300-\u036f]/g, '');
-
-      this.logger.log(`Question normalisée: "${normalizedUserQuestion}"`);
-
-      // Filtrer les mots clés significatifs
-      const keywords = this.extractSignificantKeywords(normalizedUserQuestion);
-      this.logger.log(`Mots-clés extraits: ${keywords.join(', ')}`);
-
-      // Comparer avec chaque option
-      const scoredOptions = options.map((option) => {
-        // Normaliser la question de l'option
-        const normalizedOptionQuestion = option.question
-          .toLowerCase()
-          .normalize('NFD')
-          .replace(/[\u0300-\u036f]/g, '');
-
-        // Analyse de correspondance des mots-clés
-        const matchScore = this.calculateKeywordMatchScore(
-          keywords,
-          normalizedOptionQuestion,
-        );
-
-        // Analyse de correspondance des dates/périodes
-        const timeMatch = this.containsSameTimeReferences(
-          normalizedUserQuestion,
-          normalizedOptionQuestion,
-        );
-        const timeBonus = timeMatch ? 5 : 0;
-
-        // Score final combiné
-        const totalScore = matchScore + timeBonus - option.distance;
-
-        this.logger.log(
-          `Option "${option.question}" - Score: ${totalScore} (match: ${matchScore}, time: ${timeBonus}, distance: ${option.distance})`,
-        );
-
-        return {
-          option,
-          score: totalScore,
-        };
-      });
-
-      // Trier par score
-      scoredOptions.sort((a, b) => b.score - a.score);
-
-      // Prendre la meilleure option
-      const bestOption = scoredOptions[0].option;
-      this.logger.log(
-        `Meilleure option sélectionnée: "${bestOption.question}"`,
-      );
-
-      return bestOption;
-    } catch (error) {
-      this.logger.error(`Erreur lors de la sélection: ${error.message}`);
-      // Fallback: trier par distance en cas d'erreur
-      const sorted = [...options].sort((a, b) => a.distance - b.distance);
-      return sorted[0];
-    }
-  }
-
-  // Extraire les mots-clés significatifs de la question
   private extractSignificantKeywords(text: string): string[] {
-    // Mots à ignorer (stopwords)
     const stopwords = [
       'le',
       'la',
@@ -306,35 +376,18 @@ export class ModelService {
       'elles',
     ];
 
-    // Mots particulièrement importants à mettre en valeur
-    const importantWords = [
-      'total',
-      'cumul',
-      'cumulé',
-      'montant',
-      'somme',
-      'devis',
+    // Ajouter des mots clés spécifiques aux paramètres
+    const parameterKeywords = [
+      'ville',
+      'city',
+      'paris',
+      'lyon',
+      'marseille',
+      'bordeaux',
+      'client',
+      'projet',
+      'chantier',
       'facture',
-      'facturé',
-      'tva',
-      'ht',
-      'ttc',
-      'janvier',
-      'fevrier',
-      'mars',
-      'avril',
-      'mai',
-      'juin',
-      'juillet',
-      'aout',
-      'septembre',
-      'octobre',
-      'novembre',
-      'decembre',
-      '2023',
-      '2024',
-      '2025',
-      '2026',
     ];
 
     // Découper en mots
@@ -342,16 +395,206 @@ export class ModelService {
 
     // Filtrer et pondérer
     const keywords = words
-      .filter((word) => word.length > 2 && !stopwords.includes(word))
-      .map((word) => {
-        // Donner plus d'importance aux mots clés
-        if (importantWords.some((important) => word.includes(important))) {
-          return word.trim();
-        }
-        return word.trim();
-      });
+      .filter((word) => {
+        const normalizedWord = word.toLowerCase();
+        return (
+          word.length > 2 &&
+          !stopwords.includes(normalizedWord) &&
+          (parameterKeywords.includes(normalizedWord) ||
+            !stopwords.includes(normalizedWord))
+        );
+      })
+      .map((word) => word.trim());
 
     return keywords;
+  }
+
+  private selectBestMatch(
+    question: string,
+    options: RagQuestion[],
+  ): RagQuestion {
+    try {
+      this.logger.log(`Comparaison directe avec question: "${question}"`);
+
+      // Normaliser la question de l'utilisateur
+      const normalizedUserQuestion = question
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '');
+
+      this.logger.log(`Question normalisée: "${normalizedUserQuestion}"`);
+
+      // Extraire les paramètres potentiels de la question
+      const potentialParams = this.extractPotentialParameters(
+        normalizedUserQuestion,
+      );
+      this.logger.log(
+        `Paramètres potentiels détectés: ${JSON.stringify(potentialParams)}`,
+      );
+
+      // Filtrer les mots clés significatifs
+      const keywords = this.extractSignificantKeywords(normalizedUserQuestion);
+      this.logger.log(`Mots-clés extraits: ${keywords.join(', ')}`);
+
+      // Comparer avec chaque option
+      const scoredOptions = options.map((option) => {
+        // Normaliser la question de l'option
+        const normalizedOptionQuestion = option.question
+          .toLowerCase()
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '');
+
+        // Vérifier si l'option a des paramètres qui correspondent aux paramètres détectés
+        const parameterScore = this.calculateParameterMatchScore(
+          option.metadata.parameters || [],
+          potentialParams,
+        );
+
+        // Analyse de correspondance des mots-clés
+        const matchScore = this.calculateKeywordMatchScore(
+          keywords,
+          normalizedOptionQuestion,
+        );
+
+        // Bonus pour les requêtes avec paramètres si des paramètres sont détectés
+        const parameterBonus =
+          potentialParams.length > 0 && option.metadata.parameters ? 3 : 0;
+
+        // Score final combiné
+        const totalScore =
+          matchScore + parameterScore + parameterBonus - option.distance;
+
+        this.logger.log(
+          `Option "${option.question}" - Score: ${totalScore} (match: ${matchScore}, params: ${parameterScore}, bonus: ${parameterBonus}, distance: ${option.distance})`,
+        );
+
+        return {
+          option,
+          score: totalScore,
+        };
+      });
+
+      // Trier par score
+      scoredOptions.sort((a, b) => b.score - a.score);
+
+      // Prendre la meilleure option
+      const bestOption = scoredOptions[0].option;
+      this.logger.log(
+        `Meilleure option sélectionnée: "${bestOption.question}"`,
+      );
+
+      return bestOption;
+    } catch (error) {
+      this.logger.error(`Erreur lors de la sélection: ${error.message}`);
+      const sorted = [...options].sort((a, b) => a.distance - b.distance);
+      return sorted[0];
+    }
+  }
+
+  private extractPotentialParameters(question: string): string[] {
+    const params: string[] = [];
+
+    // Détecter les villes (après "à", "a", "de", "dans", ou en début de phrase)
+    const cityMatches = question.match(
+      /(?:^|\b(?:à|a|de|dans)\s+)([A-Za-zÀ-ÿ]+)/gi,
+    );
+    if (cityMatches) {
+      cityMatches.forEach((match) => {
+        const city = match.replace(/(?:^|\b(?:à|a|de|dans)\s+)/i, '');
+        params.push(city.trim());
+      });
+    }
+
+    // Détecter les villes avec majuscule (potentiellement sans préposition)
+    const capitalizedWords = question.match(/\b[A-Z][a-zÀ-ÿ]+\b/g);
+    if (capitalizedWords) {
+      params.push(...capitalizedWords);
+    }
+
+    // Détecter les villes communes même sans majuscule
+    const commonCities = [
+      'paris',
+      'lyon',
+      'marseille',
+      'bordeaux',
+      'toulouse',
+      'nantes',
+      'lille',
+      'strasbourg',
+    ];
+    const words = question.toLowerCase().split(/\s+/);
+    words.forEach((word) => {
+      if (commonCities.includes(word)) {
+        params.push(word);
+      }
+    });
+
+    // Dédupliquer et nettoyer
+    return [...new Set(params.map((p) => p.toLowerCase()))];
+  }
+
+  private calculateParameterMatchScore(
+    definedParams: any[],
+    detectedParams: string[],
+  ): number {
+    if (!definedParams || definedParams.length === 0) {
+      return 0;
+    }
+
+    let score = 0;
+    const normalizedDetectedParams = detectedParams.map((p) => p.toLowerCase());
+
+    definedParams.forEach((param) => {
+      const paramName = param.name.toLowerCase();
+      if (normalizedDetectedParams.some((dp) => dp.includes(paramName))) {
+        score += 2;
+      }
+
+      switch (param.name) {
+        case 'CITY':
+          // Donner un bonus important si une ville est détectée
+          if (normalizedDetectedParams.length > 0) {
+            score += 10;
+          }
+          break;
+        case 'CLIENT':
+          if (normalizedDetectedParams.some((dp) => dp.includes('client'))) {
+            score += 3;
+          }
+          break;
+        case 'DATE':
+        case 'START_DATE':
+        case 'END_DATE':
+          if (
+            normalizedDetectedParams.some((dp) =>
+              /\d{2}\/\d{2}\/\d{4}|\d{4}-\d{2}-\d{2}/.test(dp),
+            )
+          ) {
+            score += 3;
+          }
+          break;
+        case 'AMOUNT':
+          if (
+            normalizedDetectedParams.some((dp) =>
+              /\d+([.,]\d{1,2})?(\s*€|\s*euros?)/.test(dp),
+            )
+          ) {
+            score += 3;
+          }
+          break;
+        case 'STATUS':
+          if (
+            normalizedDetectedParams.some((dp) =>
+              /(brouillon|envoyee?|payee?|en[_\s]retard|annulee?)/.test(dp),
+            )
+          ) {
+            score += 3;
+          }
+          break;
+      }
+    });
+
+    return score;
   }
 
   // Calcule un score de correspondance basé sur les mots-clés
