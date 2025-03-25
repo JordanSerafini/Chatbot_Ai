@@ -1,7 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import axios from 'axios';
-import { HttpService } from '@nestjs/axios';
 
 interface RagQuestion {
   question: string;
@@ -14,32 +13,33 @@ interface RagQuestion {
 }
 
 interface RagResponse {
-  question: string;
-  sql: string;
-  description: string;
-  distance: number;
-  parameters?: any[];
+  querySelected: {
+    sql: string;
+    description: string;
+    question: string;
+    distance: number;
+    parameters?: any[];
+  };
+  otherQueries: {
+    sql: string;
+    description: string;
+    question: string;
+    distance: number;
+    parameters?: any[];
+  }[];
 }
 
 @Injectable()
 export class ModelService {
   private readonly logger = new Logger(ModelService.name);
-  // Configuration par défaut pour l'API LM Studio
-  private readonly modelConfig = {
-    max_tokens: 2000,
-    temperature: 0.1,
-    top_p: 0.95,
-    stop: ['</s>'], // Arrêter la génération au format DeepSeek
-  };
 
-  constructor(
-    private httpService: HttpService,
-    private configService: ConfigService,
-  ) {}
+  constructor(private configService: ConfigService) {}
 
   async onModuleInit() {
     this.logger.log('ModelService initialized for LM Studio');
-    // Vérifier que LM Studio est accessible
+    this.logger.log(`LM Studio URL: ${this.getLmStudioUrl()}`);
+    this.logger.log(`RAG Service URL: ${this.getRagUrl()}`);
+
     try {
       await this.checkLmStudioAvailability();
     } catch (error) {
@@ -49,302 +49,378 @@ export class ModelService {
     }
   }
 
-  private async checkLmStudioAvailability(): Promise<void> {
-    try {
-      const lmStudioUrl = this.getLmStudioUrl();
-      await axios.get(`${lmStudioUrl}/v1/models`);
-      this.logger.log('Successfully connected to LM Studio API');
-    } catch (error) {
-      this.logger.error(`Failed to connect to LM Studio API: ${error.message}`);
-      throw new Error(
-        'LM Studio API is not available. Please ensure LM Studio is running with API server enabled.',
-      );
-    }
-  }
-
   private getLmStudioUrl(): string {
     return (
-      this.configService.get<string>('LM_STUDIO_URL') ||
-      'http://localhost:1234/v1'
+      this.configService.get('LM_STUDIO_URL') || 'http://localhost:1234/v1'
     );
   }
 
-  private formatPrompt(context: string, userInput: string): string {
-    // Format compatible avec DeepSeek
-    return `<s>${context}
-
-${userInput}</s>`;
+  private getRagUrl(): string {
+    return this.configService.get('RAG_SERVICE_URL') || 'http://localhost:3002';
   }
 
-  /**
-   * Génère une réponse à partir de l'entrée utilisateur en utilisant le service RAG et le modèle LLM local
-   */
-  async generateResponse(context: string, userInput: string): Promise<string> {
-    try {
-      // 1. Obtenir des questions similaires depuis le service RAG
-      const similarQuestions = await this.getSimilarQuestions(userInput);
-
-      if (!similarQuestions || similarQuestions.length === 0) {
-        // Si aucune question similaire n'est trouvée, générer une réponse directement avec le LLM
-        return await this.generateDirectResponse(context, userInput);
-      }
-
-      // 2. Demander au LLM de choisir la meilleure requête SQL
-      const bestMatch = await this.selectBestMatch(userInput, similarQuestions);
-
-      if (!bestMatch) {
-        // Si le LLM ne peut pas sélectionner une requête, générer une réponse directement
-        return await this.generateDirectResponse(context, userInput);
-      }
-
-      // 3. Formater les résultats en langage naturel pour l'utilisateur
-      const formattedPrompt = this.formatPrompt(
-        `Vous êtes un assistant qui aide à expliquer des requêtes SQL et leurs résultats.`,
-        `Question: "${userInput}"
-         
-J'ai trouvé une requête SQL qui pourrait répondre à cette question:
-- Description: ${bestMatch.description}
-- SQL: ${bestMatch.sql}
-         
-Veuillez expliquer ce que fait cette requête SQL et comment elle répond à la question. Quelles informations cette requête va-t-elle retourner?`,
-      );
-
-      // Appeler l'API LM Studio
-      const response = await this.callLmStudioApi(formattedPrompt);
-      return response;
-    } catch (error) {
-      this.logger.error(`Failed to generate response: ${error.message}`);
-      throw new Error(`Failed to generate response: ${error.message}`);
-    }
-  }
-
-  /**
-   * Appelle l'API LM Studio pour générer une réponse
-   */
-  private async callLmStudioApi(prompt: string): Promise<string> {
+  private async checkLmStudioAvailability(): Promise<void> {
     try {
       const lmStudioUrl = this.getLmStudioUrl();
-      const response = await axios.post(
-        `${lmStudioUrl}/completions`,
-        {
-          prompt,
-          model: 'deepseek-r1-distill-llama-8b',
-          ...this.modelConfig,
-        },
-        {
-          timeout: 120000, // Augmentation du timeout à 120 secondes
-        },
-      );
-
-      // Extraire et retourner le texte généré sans les balises de fin
-      const generatedText = response.data.choices[0].text || '';
-
-      // Nettoyer la sortie
-      return generatedText.trim();
+      await axios.get(`${lmStudioUrl}/models`);
+      this.logger.log('Successfully connected to LM Studio API');
     } catch (error) {
-      this.logger.error(`Error calling LM Studio API: ${error.message}`);
-      throw error;
+      this.logger.error(`Failed to connect to LM Studio API: ${error.message}`);
+      this.logger.error(
+        'Make sure LM Studio is running with API server enabled',
+      );
     }
   }
 
-  /**
-   * Récupère les questions similaires depuis le service RAG
-   */
+  async generateResponse(question: string): Promise<RagResponse> {
+    this.logger.log(`Starting generateResponse with question: ${question}`);
+    try {
+      // 1. Get similar questions from RAG
+      const similarQuestions = await this.getSimilarQuestions(question);
+      this.logger.log(`Found ${similarQuestions.length} similar questions`);
+
+      if (similarQuestions.length === 0) {
+        return {
+          querySelected: {
+            sql: '',
+            description: '',
+            question: '',
+            distance: 0,
+          },
+          otherQueries: [],
+        };
+      }
+
+      // 2. Select best match using LM Studio
+      const bestMatch = await this.selectBestMatch(question, similarQuestions);
+      this.logger.log(`Selected best match: ${bestMatch.question}`);
+
+      // 3. Prepare other options avec toutes les informations
+      const otherQueriesDetails = similarQuestions
+        .filter((q) => q.question !== bestMatch.question)
+        .slice(0, 2)
+        .map((q) => ({
+          sql: q.metadata.sql,
+          description: q.metadata.description,
+          question: q.question,
+          distance: q.distance,
+          parameters: q.metadata.parameters || [],
+        }));
+
+      // 4. Return response avec structure complète
+      return {
+        querySelected: {
+          sql: bestMatch.metadata.sql,
+          description: bestMatch.metadata.description,
+          question: bestMatch.question,
+          distance: bestMatch.distance,
+          parameters: bestMatch.metadata.parameters || [],
+        },
+        otherQueries: otherQueriesDetails,
+      };
+    } catch (error) {
+      this.logger.error(`Error in generateResponse: ${error.message}`);
+      return {
+        querySelected: {
+          sql: '',
+          description: '',
+          question: '',
+          distance: 0,
+        },
+        otherQueries: [],
+      };
+    }
+  }
+
   private async getSimilarQuestions(question: string): Promise<RagQuestion[]> {
     try {
-      const ragServiceUrl =
-        this.configService.get<string>('RAG_SERVICE_URL') ||
-        'http://localhost:3002';
-      const response = await axios.post(`${ragServiceUrl}/rag/similar`, {
-        question,
-        nResults: 5,
-      });
+      const ragUrl = this.getRagUrl();
+      const serviceUrl = ragUrl.replace('localhost', 'rag_service');
 
-      return response.data;
+      this.logger.log(`Calling RAG service at ${serviceUrl}/rag/similar`);
+
+      const response = await axios.post(
+        `${serviceUrl}/rag/similar`,
+        { question, nResults: 5 },
+        {
+          timeout: 10000,
+          headers: { 'Content-Type': 'application/json' },
+        },
+      );
+
+      if (!response.data || !Array.isArray(response.data)) {
+        this.logger.error(
+          `Unexpected RAG response format: ${JSON.stringify(response.data)}`,
+        );
+        return [];
+      }
+
+      return response.data.filter(
+        (q) => q.question && q.metadata?.sql && typeof q.distance === 'number',
+      );
     } catch (error) {
-      this.logger.error(`Error getting similar questions: ${error.message}`);
+      this.logger.error(`RAG service error: ${error.message}`);
       return [];
     }
   }
 
-  /**
-   * Demande au LLM de sélectionner la meilleure requête SQL parmi les options
-   */
   private async selectBestMatch(
-    userQuestion: string,
+    question: string,
     options: RagQuestion[],
-  ): Promise<RagResponse | null> {
+  ): Promise<RagQuestion> {
     try {
-      // Préparer le prompt avec toutes les options pour que le LLM choisisse
-      let optionsText = '';
-      options.forEach((option, index) => {
-        optionsText += `Option ${index + 1}:
-- Question: ${option.question}
-- Description: ${option.metadata.description}
-- SQL: ${option.metadata.sql}
-- Distance: ${option.distance}
-
-`;
-      });
-
-      const formattedPrompt = this.formatPrompt(
-        `Vous êtes un expert en SQL qui doit sélectionner la requête SQL la plus pertinente pour répondre à une question.`,
-        `Question de l'utilisateur: "${userQuestion}"
-
-Voici des options de requêtes SQL existantes:
-${optionsText}
-
-Analysez la question et les options de requêtes SQL disponibles. 
-Pour chaque option, évaluez si elle répond à la question posée, en tenant compte:
-1. De la sémantique de la question
-2. Des tables et colonnes référencées dans la requête SQL
-3. Des conditions et filtres appliqués
-4. De la pertinence globale pour répondre exactement à ce qui est demandé
-
-Choisissez l'option la plus pertinente et retournez uniquement son numéro (1, 2, 3, 4 ou 5). 
-Si aucune option n'est pertinente, répondez "0".`,
+      this.logger.log(
+        'Sélection de la meilleure question via LM Studio et distance vectorielle',
       );
 
-      // Appeler l'API LM Studio avec des paramètres pour une réponse courte
-      const shortConfig = {
-        ...this.modelConfig,
-        max_tokens: 10,
-      };
+      // 1. Utiliser d'abord l'approche LLM - LM Studio
+      const prompt = this.prepareSelectionPrompt(question, options);
 
+      // Envoyer le prompt à LM Studio
       const response = await axios.post(
         `${this.getLmStudioUrl()}/completions`,
         {
-          prompt: formattedPrompt,
-          ...shortConfig,
+          prompt,
+          max_tokens: 10,
+          temperature: 0.0,
+          top_p: 1.0,
         },
-        {
-          timeout: 120000, // Augmentation du timeout à 120 secondes
-        },
+        { timeout: 30000 },
       );
 
-      // Extraire le numéro de l'option choisie
-      const fullResponse = response.data.choices[0].text || '';
+      // Extraire la réponse
+      const fullResponse = response.data.choices[0].text.trim();
+      this.logger.log(`LM Studio response: "${fullResponse}"`);
+
+      // Extraire l'index choisi par le LLM
       const match = fullResponse.match(/\d+/);
+      const llmIndex = match ? parseInt(match[0], 10) - 1 : -1;
 
-      if (!match || match[0] === '0') {
-        // Aucune option pertinente trouvée
-        return null;
+      // Vérifier que l'index est valide
+      if (llmIndex >= 0 && llmIndex < options.length) {
+        this.logger.log(
+          `LLM a sélectionné l'option ${llmIndex + 1}: "${options[llmIndex].question}"`,
+        );
+
+        // Vérifier si les mots-clés temporels (mois, semaine, etc.) correspondent
+        if (this.keywordMatch(question, options[llmIndex].question)) {
+          this.logger.log(
+            'Mots-clés temporels correspondants, sélection LLM validée',
+          );
+          return options[llmIndex];
+        } else {
+          this.logger.log(
+            "Mots-clés temporels différents, passage à l'analyse secondaire",
+          );
+        }
       }
 
-      const selectedIndex = parseInt(match[0], 10) - 1;
-      if (selectedIndex < 0 || selectedIndex >= options.length) {
-        return null;
+      // 2. Approche par recherche de mots-clés thématiques
+      const matchedByKeywords = this.findBestMatchByKeywords(question, options);
+      if (matchedByKeywords) {
+        this.logger.log(
+          `Sélection par mots-clés: "${matchedByKeywords.question}"`,
+        );
+        return matchedByKeywords;
       }
 
-      const selected = options[selectedIndex];
-      return {
-        question: selected.question,
-        sql: selected.metadata.sql,
-        description: selected.metadata.description,
-        distance: selected.distance,
-        parameters: selected.metadata.parameters,
-      };
-    } catch (error) {
-      this.logger.error(`Error selecting best match: ${error.message}`);
-      return null;
-    }
-  }
-
-  /**
-   * Génère une réponse directe sans utiliser de RAG
-   */
-  private async generateDirectResponse(
-    context: string,
-    userInput: string,
-  ): Promise<string> {
-    const formattedPrompt = this.formatPrompt(context, userInput);
-
-    try {
-      const response = await axios.post(
-        `${this.getLmStudioUrl()}/completions`,
-        {
-          prompt: formattedPrompt,
-          ...this.modelConfig,
-        },
-        {
-          timeout: 120000, // Augmentation du timeout à 120 secondes
-        },
+      // 3. Fallback: trier par distance vectorielle (meilleur score de similarité)
+      this.logger.log('Fallback: sélection par distance vectorielle');
+      const sortedByDistance = [...options].sort(
+        (a, b) => a.distance - b.distance,
       );
-
-      let generatedText = response.data.choices[0].text || '';
-
-      // Nettoyer la sortie
-      if (generatedText.includes('<|im_end|>')) {
-        generatedText = generatedText.split('<|im_end|>')[0];
-      }
-
-      return generatedText.trim();
+      return sortedByDistance[0];
     } catch (error) {
-      this.logger.error(`Error generating direct response: ${error.message}`);
-      throw error;
+      this.logger.error(`Erreur lors de la sélection: ${error.message}`);
+      // Fallback: trier par distance en cas d'erreur
+      const sorted = [...options].sort((a, b) => a.distance - b.distance);
+      return sorted[0];
     }
   }
 
-  /**
-   * Récupère les questions similaires depuis le service RAG (méthode publique pour le contrôleur)
-   */
-  async getSimilarQuestionsPublic(question: string): Promise<RagQuestion[]> {
-    return this.getSimilarQuestions(question);
-  }
+  // Vérifier si des mots-clés temporels correspondent entre la question et l'option
+  private keywordMatch(question: string, option: string): boolean {
+    // Normaliser les deux textes
+    const normalizedQuestion = question
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '');
+    const normalizedOption = option
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '');
 
-  /**
-   * Demande au LLM de sélectionner la meilleure requête SQL parmi les options (méthode publique pour le contrôleur)
-   */
-  async selectBestMatchPublic(
-    userQuestion: string,
-    options: RagQuestion[],
-  ): Promise<RagResponse | null> {
-    return this.selectBestMatch(userQuestion, options);
-  }
+    // Détecter automatiquement les mots-clés temporels dans les questions
+    const timePatterns = [
+      { regex: /\b(aujourd[''']?hui|ce jour|journee|ajd)\b/, period: 'day' },
+      { regex: /\b(demain)\b/, period: 'tomorrow' },
+      { regex: /\b(hier)\b/, period: 'yesterday' },
+      { regex: /\b(semaine|hebdo|7 jours|sept jours)\b/, period: 'week' },
+      {
+        regex: /\b(mois|mensuel|30 jours|trente jours|ce mois)\b/,
+        period: 'month',
+      },
+      {
+        regex: /\b(annee|an|annuel|12 mois|douze mois|cette annee)\b/,
+        period: 'year',
+      },
+      { regex: /\b(trimestre|3 mois|trois mois)\b/, period: 'quarter' },
+      { regex: /\b(semestre|6 mois|six mois)\b/, period: 'semester' },
+    ];
 
-  /**
-   * Génère une explication de la requête SQL sélectionnée
-   */
-  async explainSqlQuery(
-    context: string,
-    userQuestion: string,
-    selectedQuery: RagResponse,
-  ): Promise<string> {
-    const formattedPrompt = this.formatPrompt(
-      `Vous êtes un assistant qui aide à expliquer des requêtes SQL et leurs résultats.`,
-      `Question: "${userQuestion}"
-       
-J'ai trouvé une requête SQL qui pourrait répondre à cette question:
-- Description: ${selectedQuery.description}
-- SQL: ${selectedQuery.sql}
-       
-Veuillez expliquer ce que fait cette requête SQL et comment elle répond à la question. Quelles informations cette requête va-t-elle retourner?`,
+    // Détecter les périodes mentionnées dans chaque texte
+    const questionPeriods = new Set(
+      timePatterns
+        .filter((pattern) => pattern.regex.test(normalizedQuestion))
+        .map((pattern) => pattern.period),
     );
 
-    return this.callLmStudioApi(formattedPrompt);
-  }
+    const optionPeriods = new Set(
+      timePatterns
+        .filter((pattern) => pattern.regex.test(normalizedOption))
+        .map((pattern) => pattern.period),
+    );
 
-  /**
-   * Génère une réponse directe sans utiliser de RAG (méthode publique pour le contrôleur)
-   */
-  async generateDirectResponsePublic(
-    context: string,
-    userInput: string,
-  ): Promise<string> {
-    return this.generateDirectResponse(context, userInput);
-  }
-
-  /**
-   * Renvoie la question choisie ou indique l'absence de similarité
-   */
-  async getSelectedQuestionOrSimilarity(
-    userQuestion: string,
-    options: RagQuestion[],
-  ): Promise<string> {
-    const bestMatch = await this.selectBestMatch(userQuestion, options);
-    if (!bestMatch) {
-      return 'pas de similarité';
+    // Si aucune période n'est mentionnée dans les deux, on ne peut pas juger
+    if (questionPeriods.size === 0 && optionPeriods.size === 0) {
+      return true;
     }
-    return bestMatch.question;
+
+    // Vérifier l'intersection des périodes
+    let hasCommonPeriod = false;
+    questionPeriods.forEach((period) => {
+      if (optionPeriods.has(period)) {
+        hasCommonPeriod = true;
+      }
+    });
+
+    // S'il y a au moins une période commune, c'est un bon match
+    if (hasCommonPeriod) {
+      return true;
+    }
+
+    // Si les deux mentionnent des périodes mais aucune en commun, c'est un mauvais match
+    if (questionPeriods.size > 0 && optionPeriods.size > 0) {
+      return false;
+    }
+
+    // Cas par défaut: une seule mentionne une période, on ne peut pas être certain
+    return true;
+  }
+
+  // Trouver la meilleure correspondance par mots-clés thématiques
+  private findBestMatchByKeywords(
+    question: string,
+    options: RagQuestion[],
+  ): RagQuestion | null {
+    // Normaliser la question
+    const normalizedQuestion = question
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '');
+
+    // Extraire les mots-clés importants (enlever les mots communs)
+    const keywords = this.extractKeywords(normalizedQuestion);
+
+    // Évaluer chaque option
+    let bestScore = 0;
+    let bestMatch: RagQuestion | null = null;
+
+    for (const option of options) {
+      const normalizedOption = option.question
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '');
+      let score = 0;
+
+      // Compter combien de mots-clés correspondent
+      for (const keyword of keywords) {
+        if (normalizedOption.includes(keyword)) {
+          score += 1;
+        }
+      }
+
+      // Bonus pour les mots-clés temporels correspondants
+      if (this.keywordMatch(normalizedQuestion, normalizedOption)) {
+        score += 2;
+      }
+
+      // Si c'est un meilleur score, mettre à jour
+      if (score > bestScore) {
+        bestScore = score;
+        bestMatch = option;
+      }
+    }
+
+    return bestMatch;
+  }
+
+  // Extraire les mots-clés importants d'une question
+  private extractKeywords(text: string): string[] {
+    // Mots communs à ignorer
+    const stopwords = [
+      'le',
+      'la',
+      'les',
+      'un',
+      'une',
+      'des',
+      'du',
+      'de',
+      'a',
+      'est',
+      'sont',
+      'et',
+      'ou',
+      'que',
+      'qui',
+      'quoi',
+      'comment',
+      'quel',
+      'quelle',
+    ];
+
+    // Découper le texte en mots
+    const words = text.split(/\s+/);
+
+    // Filtrer les mots communs et courts
+    return words.filter((word) => word.length > 2 && !stopwords.includes(word));
+  }
+
+  private prepareSelectionPrompt(
+    question: string,
+    options: RagQuestion[],
+
+  ): string {
+    // Générer le texte des options avec leur description complète
+    let optionsText = '';
+    options.forEach((option, index) => {
+      optionsText += `Option ${index + 1}:
+- QUESTION: "${option.question}"
+- DESCRIPTION: "${option.metadata.description}"
+- SCORE DE SIMILARITÉ: ${(1 - option.distance).toFixed(2)}
+`;
+    });
+
+    return `Tu es un assistant SQL spécialisé qui aide à comprendre les intentions des utilisateurs.
+
+QUESTION DE L'UTILISATEUR: "${question}"
+
+TÂCHE:
+Analyse attentivement la question de l'utilisateur et détermine quelle option répond le mieux à son besoin réel.
+
+OPTIONS DISPONIBLES:
+${optionsText}
+
+INSTRUCTIONS DÉTAILLÉES:
+1. Analyse la sémantique et l'intention réelle de la question de l'utilisateur
+2. Identifie les concepts clés (dates, périodes, entités) mentionnés dans la question
+3. Compare ces concepts avec chaque option (question ET description)
+4. Accorde plus d'importance à la compréhension de l'intention qu'au score de similarité
+5. Prête attention particulière aux éléments temporels (aujourd'hui, demain, semaine, mois)
+
+RÉPONSE:
+Réponds uniquement par le numéro de l'option choisie (1, 2, 3, etc.) sans aucune explication ni justification.`;
+
   }
 }

@@ -1,159 +1,243 @@
-import { Body, Controller, Post, Logger } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Post,
+  Logger,
+  HttpException,
+  HttpStatus,
+} from '@nestjs/common';
 import { ModelService } from './model.service';
+import { QuerierService } from '../bdd_querier/querier.service';
+import { TextProcessorService } from './text-processor.service';
+import { HttpService } from '@nestjs/axios';
+import { firstValueFrom } from 'rxjs';
+
+interface RagResponse {
+  querySelected: {
+    sql: string;
+    description: string;
+    question: string;
+    distance: number;
+    parameters?: any[];
+  };
+  otherQueries: {
+    sql: string;
+    description: string;
+    question: string;
+    distance: number;
+    parameters?: any[];
+  }[];
+}
 
 interface QueryDto {
   question: string;
-  context?: string;
 }
 
-interface SqlOption {
-  question: string;
-  sql: string;
-  description: string;
-  distance: number;
-  parameters?: any[];
-}
-
-interface QueryResponseDto {
-  question: string;
-  answer: string;
-  selectedSql?: {
+interface QueryExecutionResponse {
+  success: boolean;
+  data?: any[];
+  count?: number;
+  sql?: string;
+  description?: string;
+  error?: string;
+  selectedQuery?: {
+    question: string;
     sql: string;
     description: string;
-    distance: number;
   };
-  allOptions?: SqlOption[];
-  source: 'rag' | 'direct';
-  confidence?: number;
-}
-
-interface SimilarityResponseDto {
-  result: string;
+  alternativeQuestions?: {
+    question: string;
+    sql: string;
+    description: string;
+  }[];
+  textResponse?: string;
 }
 
 @Controller('ai')
 export class ModelController {
   private readonly logger = new Logger(ModelController.name);
 
-  constructor(private readonly modelService: ModelService) {}
+  constructor(
+    private readonly modelService: ModelService,
+    private readonly querierService: QuerierService,
+    private readonly textProcessorService: TextProcessorService,
+    private readonly httpService: HttpService,
+  ) {}
 
   @Post('query')
-  async generateResponse(
-    @Body() queryDto: QueryDto,
-  ): Promise<QueryResponseDto> {
+  async generateResponse(@Body() queryDto: QueryDto): Promise<RagResponse> {
     this.logger.log(`Received question: ${queryDto.question}`);
 
+    const response = await this.modelService.generateResponse(
+      queryDto.question,
+    );
+
+    this.logger.log(
+      `Generated response: ${JSON.stringify({
+        selectedQuestion: response.querySelected.question,
+        otherQueriesCount: response.otherQueries.length,
+      })}`,
+    );
+
+    return response;
+  }
+
+  @Post('query-execute')
+  async queryAndExecute(
+    @Body() queryDto: QueryDto,
+  ): Promise<QueryExecutionResponse> {
+    this.logger.log(`Received query execution request: ${queryDto.question}`);
+
     try {
-      const context =
-        queryDto.context ||
-        "Vous êtes un assistant expert en gestion d'entreprise qui aide à répondre aux questions sur les clients, projets, factures et planning.";
-
-      // 1. Obtenir toutes les questions similaires du service RAG
-      const similarQuestions =
-        await this.modelService.getSimilarQuestionsPublic(queryDto.question);
-
-      // 2. Si aucune question similaire, générer une réponse directe
-      if (!similarQuestions || similarQuestions.length === 0) {
-        const directResponse =
-          await this.modelService.generateDirectResponsePublic(
-            context,
-            queryDto.question,
-          );
-
-        return {
-          question: queryDto.question,
-          answer: directResponse,
-          source: 'direct',
-          allOptions: [],
-        };
-      }
-
-      // 3. Faire choisir la requête SQL la plus pertinente par le LLM
-      const bestMatch = await this.modelService.selectBestMatchPublic(
+      // 1. Obtenir la requête SQL via le RAG
+      const response = await this.modelService.generateResponse(
         queryDto.question,
-        similarQuestions,
       );
 
-      // 4. Reformater les résultats pour les inclure dans la réponse
-      const options = similarQuestions.map((sq) => ({
-        question: sq.question,
-        sql: sq.metadata.sql,
-        description: sq.metadata.description,
-        distance: sq.distance,
-        parameters: sq.metadata.parameters,
-      }));
-
-      // 5. Si aucune requête pertinente n'a été choisie
-      if (!bestMatch) {
-        // Génération d'une réponse directe puisque aucune requête SQL n'a été jugée pertinente
-        const noMatchResponse =
-          await this.modelService.generateDirectResponsePublic(
-            context,
-            queryDto.question,
-          );
-
-        return {
-          question: queryDto.question,
-          answer: noMatchResponse,
-          source: 'direct',
-          allOptions: options,
-          confidence: 0,
-        };
+      if (!response.querySelected || !response.querySelected.sql) {
+        throw new HttpException(
+          'No suitable SQL query found for your question',
+          HttpStatus.BAD_REQUEST,
+        );
       }
 
-      // 6. Générer une explication de la requête SQL choisie
-      const response = await this.modelService.explainSqlQuery(
-        context,
-        queryDto.question,
-        bestMatch,
-      );
+      this.logger.log(`Query selected: ${response.querySelected.sql}`);
 
-      // 7. Construire la réponse complète
-      return {
-        question: queryDto.question,
-        answer: response,
-        selectedSql: {
-          sql: bestMatch.sql,
-          description: bestMatch.description,
-          distance: bestMatch.distance,
-        },
-        allOptions: options,
-        source: 'rag',
-        confidence: 1 - bestMatch.distance, // Convertir la distance en score de confiance (0-1)
-      };
+      try {
+        // 2. Exécuter la requête SQL via le QuerierService
+        const sqlResult = await this.querierService.executeSelectedQuery(
+          response.querySelected.sql,
+          response.querySelected.parameters || [],
+        );
+
+        // 3. Retourner la réponse combinée
+        const otherQueries = response.otherQueries.map((query) => ({
+          question: query.question,
+          sql: query.sql,
+          description: query.description,
+        }));
+
+        return {
+          success: true,
+          data: sqlResult.result,
+          count: sqlResult.result.length,
+          sql: response.querySelected.sql,
+          description: response.querySelected.description,
+          selectedQuery: {
+            question: response.querySelected.question,
+            sql: response.querySelected.sql,
+            description: response.querySelected.description,
+          },
+          alternativeQuestions: otherQueries,
+          textResponse: this.textProcessorService.generateTextResponse(
+            response.querySelected.description,
+            sqlResult.result,
+            queryDto.question,
+          ),
+        };
+      } catch (sqlError) {
+        // Gestion des erreurs SQL
+        this.logger.error(`SQL execution error: ${sqlError.message}`);
+        return {
+          success: false,
+          error: `SQL execution error: ${sqlError.message}`,
+          sql: response.querySelected.sql,
+          description: response.querySelected.description,
+        };
+      }
     } catch (error) {
-      this.logger.error(`Error generating response: ${error.message}`);
-      throw error;
+      this.logger.error(`Error in query-execute: ${error.message}`);
+      return {
+        success: false,
+        error: error.message,
+      };
     }
   }
 
-  @Post('similarity-check')
-  async checkSimilarity(
-    @Body() queryDto: QueryDto,
-  ): Promise<SimilarityResponseDto> {
-    this.logger.log(`Checking similarity for question: ${queryDto.question}`);
+
+  @Post('query-run')
+  async queryAndRun(@Body() queryDto: QueryDto): Promise<any> {
+    this.logger.log(`Received RAG query and run request: ${queryDto.question}`);
 
     try {
-      // Obtenir toutes les questions similaires du service RAG
-      const similarQuestions =
-        await this.modelService.getSimilarQuestionsPublic(queryDto.question);
+      // 1. Obtenir la requête SQL via le RAG
+      const ragResponse = await this.modelService.generateResponse(
+        queryDto.question,
+      );
 
-      // Si aucune question similaire, retourner directement "pas de similarité"
-      if (!similarQuestions || similarQuestions.length === 0) {
-        return { result: 'pas de similarité' };
-      }
 
-      // Demander au modèle de vérifier la similarité
-      const similarQuestion =
-        await this.modelService.getSelectedQuestionOrSimilarity(
-          queryDto.question,
-          similarQuestions,
+      // 2. Envoyer la requête au contrôleur querier via HTTP
+      const querierUrl = 'http://localhost:3001/query/rag';
+      this.logger.log(`Sending request to querier: ${querierUrl}`);
+
+      try {
+        const response = await firstValueFrom(
+          this.httpService.post(querierUrl, ragResponse),
         );
 
-      return { result: similarQuestion };
+        // 3. Préparer une réponse complète pour le chatbot
+        const otherQuestions = ragResponse.otherQueries.map((query) => ({
+          question: query.question,
+          sql: query.sql,
+          description: query.description,
+        }));
+
+        return {
+          success: true,
+          // Résultats de l'exécution SQL
+          data: response.data.data || [],
+          count: response.data.count || 0,
+
+          // Informations sur la requête exécutée
+          selectedQuery: {
+            question: ragResponse.querySelected.question,
+            sql: ragResponse.querySelected.sql,
+            description: ragResponse.querySelected.description,
+          },
+
+          // Questions alternatives pour le chatbot
+          alternativeQuestions: otherQuestions,
+
+          // Résumé pour le chatbot
+          summary: {
+            question: queryDto.question,
+            selectedQuestion: ragResponse.querySelected.question,
+            resultsCount: response.data.data?.length || 0,
+            alternativesCount: otherQuestions.length,
+          },
+
+          // Réponse textuelle pour l'interface utilisateur
+          textResponse: this.textProcessorService.generateTextResponse(
+            ragResponse.querySelected.description,
+            response.data.data || [],
+            queryDto.question,
+          ),
+        };
+      } catch (httpError) {
+        this.logger.error(`HTTP error: ${httpError.message}`);
+        if (httpError.response) {
+          this.logger.error(
+            `Response data: ${JSON.stringify(httpError.response.data)}`,
+          );
+        }
+
+        return {
+          success: false,
+          error: `Error executing query: ${httpError.message}`,
+          selectedQuery: ragResponse.querySelected,
+          alternativeQuestions: ragResponse.otherQueries.map((query) => ({
+            question: query.question,
+            sql: query.sql,
+            description: query.description,
+          })),
+        };
+      }
     } catch (error) {
-      this.logger.error(`Error checking similarity: ${error.message}`);
-      throw error;
+      this.logger.error(`Error in queryAndRun: ${error.message}`);
+      return {
+        success: false,
+        error: error.message,
+      };
     }
   }
 }

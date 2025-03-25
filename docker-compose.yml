@@ -98,24 +98,33 @@ services:
       - /app/node_modules
     ports:
       - "3001:3001"
-    environment:
-      - NODE_ENV=development
-      - RAG_SERVICE_URL=http://rag_service:3002
-      - POSTGRES_HOST=postgres
-      - POSTGRES_PORT=${POSTGRES_PORT}
-      - POSTGRES_USER=${POSTGRES_USER}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-      - POSTGRES_DB=${POSTGRES_DB}
-    depends_on:
-      postgres:
-        condition: service_healthy
-      rag_service:
-        condition: service_started
     networks:
       - app-network
-    command: npm run start:dev
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    environment:
+      - NODE_ENV=development
+      - PORT=3001
+      - LM_STUDIO_URL=https://7642-2a01-cb15-4c5-c200-ff2e-b498-e114-f0c2.ngrok-free.app/v1
+      - RAG_SERVICE_URL=http://rag_service:3002
+    depends_on:
+      - rag_service
+
+  # lmstudio:
+  #   build:
+  #     context: ./Backend/lmstudio
+  #     dockerfile: Dockerfile
+  #   ports:
+  #     - "1234:1234"
+  #   volumes:
+  #     - ./models:/app/models
+  #   deploy:
+  #     resources:
+  #       reservations:
+  #         devices:
+  #           - driver: nvidia
+  #             count: 1
+  #             capabilities: [gpu]
+  #   networks:
+  #     - app-network
 
 networks:
   app-network:
