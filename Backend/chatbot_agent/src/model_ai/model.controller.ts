@@ -8,6 +8,7 @@ import {
 } from '@nestjs/common';
 import { ModelService } from './model.service';
 import { QuerierService } from '../bdd_querier/querier.service';
+import { TextProcessorService } from './text-processor.service';
 import { HttpService } from '@nestjs/axios';
 import { firstValueFrom } from 'rxjs';
 
@@ -39,6 +40,17 @@ interface QueryExecutionResponse {
   sql?: string;
   description?: string;
   error?: string;
+  selectedQuery?: {
+    question: string;
+    sql: string;
+    description: string;
+  };
+  alternativeQuestions?: {
+    question: string;
+    sql: string;
+    description: string;
+  }[];
+  textResponse?: string;
 }
 
 @Controller('ai')
@@ -48,6 +60,7 @@ export class ModelController {
   constructor(
     private readonly modelService: ModelService,
     private readonly querierService: QuerierService,
+    private readonly textProcessorService: TextProcessorService,
     private readonly httpService: HttpService,
   ) {}
 
@@ -98,12 +111,29 @@ export class ModelController {
         );
 
         // 3. Retourner la réponse combinée
+        const otherQueries = response.otherQueries.map((query) => ({
+          question: query.question,
+          sql: query.sql,
+          description: query.description,
+        }));
+
         return {
           success: true,
           data: sqlResult.result,
           count: sqlResult.result.length,
           sql: response.querySelected.sql,
           description: response.querySelected.description,
+          selectedQuery: {
+            question: response.querySelected.question,
+            sql: response.querySelected.sql,
+            description: response.querySelected.description,
+          },
+          alternativeQuestions: otherQueries,
+          textResponse: this.textProcessorService.generateTextResponse(
+            response.querySelected.description,
+            sqlResult.result,
+            queryDto.question,
+          ),
         };
       } catch (sqlError) {
         // Gestion des erreurs SQL
@@ -173,6 +203,13 @@ export class ModelController {
             resultsCount: response.data.data?.length || 0,
             alternativesCount: otherQuestions.length,
           },
+
+          // Réponse textuelle pour l'interface utilisateur
+          textResponse: this.textProcessorService.generateTextResponse(
+            ragResponse.querySelected.description,
+            response.data.data || [],
+            queryDto.question,
+          ),
         };
       } catch (httpError) {
         this.logger.error(`HTTP error: ${httpError.message}`);
