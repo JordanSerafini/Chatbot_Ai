@@ -2,6 +2,7 @@ import { Injectable, OnModuleInit, Logger } from '@nestjs/common';
 import { ChromaClient, Collection, GetCollectionParams } from 'chromadb';
 import { Question, SimilarQuestion } from '../interfaces/question.interface';
 import { ConfigService } from '@nestjs/config';
+import * as crypto from 'crypto';
 
 @Injectable()
 export class ChromaService implements OnModuleInit {
@@ -11,12 +12,10 @@ export class ChromaService implements OnModuleInit {
   private readonly COLLECTION_NAME = 'questions_collection';
   private readonly embeddingFunction = {
     generate: (texts: string[]): Promise<number[][]> => {
+      // Utiliser une fonction déterministe pour générer des embeddings
+      // basés sur le contenu du texte
       return Promise.resolve(
-        texts.map(() =>
-          Array(1536)
-            .fill(0)
-            .map(() => Math.random() * 2 - 1),
-        ),
+        texts.map((text) => this.generateDeterministicEmbedding(text)),
       );
     },
   };
@@ -28,6 +27,43 @@ export class ChromaService implements OnModuleInit {
     this.client = new ChromaClient({
       path: chromaUrl,
     });
+  }
+
+  /**
+   * Génère un embedding déterministe pour un texte donné
+   * Ceci assure que le même texte produit toujours le même vecteur
+   */
+  private generateDeterministicEmbedding(text: string): number[] {
+    // Normaliser le texte pour une meilleure cohérence
+    const normalizedText = text
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '');
+
+    // Créer un hash SHA-256 du texte
+    const hash = crypto
+      .createHash('sha256')
+      .update(normalizedText)
+      .digest('hex');
+
+    // Convertir le hash en un vecteur de 1536 dimensions (taille standard)
+    const vector = new Array(1536).fill(0);
+
+    // Remplir le vecteur avec des valeurs dérivées du hash
+    for (let i = 0; i < 1536; i++) {
+      // Utiliser des sous-sections du hash pour générer des valeurs pour chaque dimension
+      const position = i % 64;
+      const byte1 = parseInt(hash.substring(position, position + 1), 16);
+      const byte2 = parseInt(
+        hash.substring((position + 1) % 64, (position + 2) % 64),
+        16,
+      );
+
+      // Convertir en valeur entre -1 et 1
+      vector[i] = ((byte1 / 15) * 2 - 1) * 0.8 + ((byte2 / 15) * 2 - 1) * 0.2;
+    }
+
+    return vector;
   }
 
   async onModuleInit() {
