@@ -119,7 +119,7 @@ export class SqlQueriesService {
 
   private async checkForUpdates(queryFiles: string[]): Promise<boolean> {
     let hasUpdates = false;
-    const queryDir = path.join(process.cwd(), 'Backend', 'chroma_db', 'query');
+    const queryDir = path.join(process.cwd(), 'query');
     const currentHashes = new Map<string, string>();
 
     // Charger les hashes actuels
@@ -190,12 +190,7 @@ export class SqlQueriesService {
       await this.client.deleteCollection({ name: this.HASH_COLLECTION_NAME });
       await this.initializeCollections();
 
-      const queryDir = path.join(
-        process.cwd(),
-        'Backend',
-        'chroma_db',
-        'query',
-      );
+      const queryDir = path.join(process.cwd(), 'query');
       this.logger.log(`Chargement des requêtes depuis: ${queryDir}`);
 
       let totalQueries = 0;
