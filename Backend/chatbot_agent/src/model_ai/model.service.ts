@@ -457,37 +457,20 @@ export class ModelService {
       // Formater les données prétraitées pour le prompt
       const promptData = JSON.stringify(processedData, null, 2);
 
-      // Préparer le prompt pour le LLM avec un ton conversationnel
+      // Préparer le prompt simple avec juste la question et les données
       const prompt = `
-Tu es un assistant d'entreprise conversationnel et amical pour une entreprise du secteur BTP. Réponds UNIQUEMENT en français.
+Tu es un assistant d'entreprise pour une entreprise du secteur BTP. Réponds en français.
 
 Question de l'utilisateur: "${userQuestion}"
 
-Description des données: "${description}"
+Description des données disponibles: "${description}"
 
-Type de données: "${dataType}"
+Nombre de résultats: ${processedData.length}
 
-Données disponibles (${processedData.length} résultats):
+Données:
 ${promptData}
 
-INSTRUCTIONS:
-1. Écris UN SEUL paragraphe conversationnel qui explique les données ci-dessus de manière claire et concise
-2. Utilise un ton amical et naturel, comme si tu parlais à un collègue
-3. Ne commence pas par "Voici les résultats" ou "J'ai trouvé"
-4. Mentionne les informations les plus pertinentes et les tendances notables
-5. N'oublie pas de mentionner le nombre total d'éléments trouvés
-6. Format les montants avec des espaces pour séparer les milliers (ex: 10 000 €)
-7. NE liste PAS les éléments individuels, fais juste un résumé global
-8. NE fais PAS de liste à puces ou de présentation formelle
-9. Limite-toi à un paragraphe d'environ 3-5 phrases maximum
-10. N'utilise PAS de terme technique comme "requête SQL", "données" ou "résultats"
-11. Ne mentionne JAMAIS ton processus d'analyse ou ta réflexion
-12. Évite ABSOLUMENT des phrases comme "je dois maintenant analyser", "let me see", "okay", "first", etc.
-13. Ne produis JAMAIS de texte en anglais
-14. Reste concis et ne tronque pas ta réponse finale
-15. N'inclus PAS de mots comme "Taquin", des références à des dates comme "le 15 janvier 2024", ou d'autres artefacts de formatage
-
-Ton paragraphe explicatif (pas plus de 5 phrases, UNIQUEMENT en français):`;
+Réponds à la question de l'utilisateur en utilisant ces données de manière claire et directe, en format paragraphe. N'utilise pas de listes à puces. Utilise un ton naturel et conversationnel.`;
 
       // Envoyer le prompt à LM Studio
       const response = await axios.post(
@@ -505,26 +488,6 @@ Ton paragraphe explicatif (pas plus de 5 phrases, UNIQUEMENT en français):`;
       // Extraire et nettoyer le paragraphe généré
       let generatedParagraph = response.data.choices[0].text.trim();
       generatedParagraph = this.cleanupResponse(generatedParagraph);
-
-      // Vérifier si le paragraphe contient des traces d'instructions, analyse ou anglais
-      if (
-        generatedParagraph.includes('analyse') ||
-        generatedParagraph.includes('structure') ||
-        generatedParagraph.includes('Je dois') ||
-        generatedParagraph.includes('maintenant') ||
-        generatedParagraph.includes('Okay,') ||
-        generatedParagraph.includes('let') ||
-        generatedParagraph.includes('first') ||
-        generatedParagraph.includes('I ') ||
-        generatedParagraph.includes('Taquin')
-      ) {
-        // Si oui, utiliser la réponse de secours
-        generatedParagraph = this.generateSummaryFromData(
-          data,
-          userQuestion,
-          description,
-        );
-      }
 
       // Combiner le paragraphe explicatif avec les données formatées et le type de données
       const finalResponse = `${generatedParagraph}\n\n${formattedDataString}`;

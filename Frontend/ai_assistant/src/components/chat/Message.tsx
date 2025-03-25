@@ -72,16 +72,31 @@ function Message({ response }: MessageProps) {
         // Pour les clients
         if (dataType === 'Customer') {
             const count = response.data.length;
-            const projetsActifs = response.data.reduce((total, client) => {
+            
+            // Trier les clients par nombre de projets actifs (décroissant)
+            const sortedClients = [...response.data].sort((a, b) => {
+                const aProjects = parseInt(String(a.active_projects || '0'), 10);
+                const bProjects = parseInt(String(b.active_projects || '0'), 10);
+                return bProjects - aProjects;
+            });
+            
+            // Calculer le total des projets actifs
+            const projetsActifs = sortedClients.reduce((total, client) => {
                 const activeProj = parseInt(String(client.active_projects || '0'), 10);
                 return total + activeProj;
             }, 0);
             
-            const exemples = response.data.slice(0, 3).map(client => 
-                `${String(client.firstname || '')} ${String(client.lastname || '')}`
-            ).join(', ');
+            // Trouver les clients avec le plus de projets
+            const maxProjects = parseInt(String(sortedClients[0].active_projects || '0'), 10);
+            const topClients = sortedClients
+                .filter(client => parseInt(String(client.active_projects || '0'), 10) === maxProjects)
+                .map(client => `${String(client.firstname || '')} ${String(client.lastname || '')}`);
             
-            return `Nous avons ${count} clients avec des projets actifs dans notre système, pour un total de ${projetsActifs} projets. Parmi eux se trouvent ${exemples}${count > 3 ? ' et d\'autres' : ''}.`;
+            if (maxProjects > 1) {
+                return `Tous les clients ont actuellement ${maxProjects} projet${maxProjects > 1 ? 's' : ''} actif${maxProjects > 1 ? 's' : ''}. Le nombre total de clients est de ${count}, pour un total de ${projetsActifs} projets actifs. Parmi ces clients figurent ${topClients.slice(0, 3).join(', ')}${topClients.length > 3 ? ' et d\'autres' : ''}.`;
+            } else {
+                return `Tous les ${count} clients ont actuellement 1 projet actif chacun, pour un total de ${projetsActifs} projets. Ces clients incluent ${topClients.slice(0, 3).join(', ')}${topClients.length > 3 ? ' et d\'autres' : ''}.`;
+            }
         }
         
         // Pour les autres types de données
@@ -91,8 +106,18 @@ function Message({ response }: MessageProps) {
     // Nettoyer la réponse
     let cleanResponse = cleanTextResponse(rawResponse);
     
-    // Si pas de réponse textuelle claire, générer une synthèse
-    if (!cleanResponse || cleanResponse === response.description) {
+    // Vérifier si la réponse ressemble à un JSON
+    const isJsonResponse = (str: string): boolean => {
+        try {
+            // Vérifier si la chaîne commence par { ou [
+            return /^\s*(\{|\[)/.test(str);
+        } catch (e) {
+            return false;
+        }
+    };
+
+    // Si pas de réponse textuelle claire ou si c'est du JSON, générer une synthèse
+    if (!cleanResponse || cleanResponse === response.description || isJsonResponse(cleanResponse)) {
         cleanResponse = generateTextSummary();
     }
 
