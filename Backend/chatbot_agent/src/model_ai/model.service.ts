@@ -444,6 +444,17 @@ export class ModelService {
       params.push(`STATUS:${normalizedStatus}`);
     }
 
+    // Vérifier si la question porte spécifiquement sur des devis refusés
+    if (
+      normalizedQuestion.includes('devis') &&
+      (normalizedQuestion.includes('refuse') ||
+        normalizedQuestion.includes('rejete'))
+    ) {
+      if (!params.includes('STATUS:refusée')) {
+        params.push('STATUS:refusée');
+      }
+    }
+
     // Détecter les montants (garder le code existant)
     const amountMatches = normalizedQuestion.match(
       /(\d+([.,]\d{1,2})?)\s*(euros?|€)/gi,
@@ -554,8 +565,8 @@ export class ModelService {
 
     // Types de documents avec leurs poids
     const documentTypes = {
-      devis: { weight: 25, bonus: 15 }, // Augmenté et changé en bonus au lieu de pénalité
-      facture: { weight: 25, bonus: 15 },
+      devis: { weight: 40, bonus: 30 }, // Augmenté significativement
+      facture: { weight: 40, bonus: 30 },
       projet: { weight: 20, bonus: 10 },
       chantier: { weight: 20, bonus: 10 },
     };
@@ -568,11 +579,11 @@ export class ModelService {
       somme: 6,
       euros: 5,
       entre: 5,
-      recent: 10, // Augmenté pour les mots temporels
+      recent: 15, // Augmenté
       nouveau: 8,
       dernier: 8,
-      refuse: 12, // Augmenté pour les statuts
-      rejete: 12,
+      refuse: 25, // Augmenté significativement
+      rejete: 25, // Augmenté significativement
       valide: 12,
       accepte: 12,
     };
@@ -593,7 +604,7 @@ export class ModelService {
       }
     }
 
-    // Vérifier les mots-clés critiques
+    // Vérifier les mots-clés critiques avec bonus pour les combinaisons spécifiques
     for (const [keyword, weight] of Object.entries(criticalKeywords)) {
       if (normalizedText.includes(keyword)) {
         score += weight;
@@ -601,18 +612,31 @@ export class ModelService {
         if (normalizedText.startsWith(keyword)) {
           score += Math.floor(weight / 2);
         }
+
+        // Bonus spécial pour les combinaisons pertinentes
+        if (keyword === 'refuse' && normalizedText.includes('devis')) {
+          score += 30; // Bonus important pour "devis refusé"
+        }
+        if (keyword === 'recent' && normalizedText.includes('devis')) {
+          score += 20; // Bonus pour "devis récent"
+        }
       }
     }
 
     // Bonus supplémentaire si un type de document a été trouvé
     if (hasDocumentTypeMatch) {
-      score += 10;  // Bonus pour avoir trouvé un type de document valide
+      score += 10; // Bonus pour avoir trouvé un type de document valide
     }
 
     // Bonus pour les correspondances exactes de mots-clés
     keywords.forEach((keyword) => {
       if (normalizedText.includes(keyword.toLowerCase())) {
         score += 5; // Bonus de base pour chaque mot-clé trouvé
+
+        // Bonus supplémentaire pour les combinaisons de mots-clés importantes
+        if (keyword === 'devis' && normalizedText.includes('refuse')) {
+          score += 25; // Bonus important pour la combinaison devis+refusé
+        }
       }
     });
 
@@ -633,6 +657,29 @@ export class ModelService {
 
       this.logger.log(`Question normalisée: "${normalizedUserQuestion}"`);
 
+      // Vérification directe pour les requêtes spécifiques
+      if (
+        normalizedUserQuestion.includes('devis') &&
+        (normalizedUserQuestion.includes('refuse') ||
+          normalizedUserQuestion.includes('rejete'))
+      ) {
+        const refusedQuotationQuery = options.find((option) => {
+          const normalizedOption = option.question.toLowerCase();
+          return (
+            normalizedOption.includes('devis') &&
+            (normalizedOption.includes('refus') ||
+              normalizedOption.includes('rejet'))
+          );
+        });
+
+        if (refusedQuotationQuery) {
+          this.logger.log(
+            `Correspondance directe trouvée pour devis refusés: ${refusedQuotationQuery.question}`,
+          );
+          return refusedQuotationQuery;
+        }
+      }
+
       const potentialParams = this.extractPotentialParameters(
         normalizedUserQuestion,
       );
@@ -642,6 +689,27 @@ export class ModelService {
 
       const keywords = this.extractSignificantKeywords(normalizedUserQuestion);
       this.logger.log(`Mots-clés extraits: ${keywords.join(', ')}`);
+
+      // Vérifier si la question contient un ID de chantier
+      const projectIdMatch = normalizedUserQuestion.match(
+        /[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}/i,
+      );
+      const hasProjectId = !!projectIdMatch;
+
+      // Vérifier si la question demande des détails
+      const isDetailsRequest =
+        normalizedUserQuestion.includes('details') ||
+        normalizedUserQuestion.includes('détails') ||
+        normalizedUserQuestion.includes('info');
+
+      // Vérifier le type de document demandé
+      const isQuotationQuestion = normalizedUserQuestion.includes('devis');
+      const isInvoiceQuestion = normalizedUserQuestion.includes('facture');
+
+      // Vérifier si un statut est mentionné
+      const hasStatus = normalizedUserQuestion.match(
+        /\b(brouillon|envoy[ée]e?|pay[ée]e?|en[_\s]retard|annul[ée]e?|refus[ée]e?|rejet[ée]e?|valid[ée]e?|accept[ée]e?)\b/i,
+      );
 
       const scoredOptions = options.map((option) => {
         const normalizedOptionQuestion = option.question
@@ -670,20 +738,88 @@ export class ModelService {
         });
 
         // Bonus pour les correspondances de paramètres
-        const parameterBonus = hasMatchingParamTypes ? 25 : 0; // Augmenté à 25
+        const parameterBonus = hasMatchingParamTypes ? 50 : 0;
+
+        // Bonus spécial pour les combinaisons de mots-clés importantes
+        let combinationBonus = 0;
+        if (
+          normalizedUserQuestion.includes('devis') &&
+          normalizedOptionQuestion.includes('devis')
+        ) {
+          combinationBonus += 50;
+        }
+        if (
+          normalizedUserQuestion.includes('refuse') &&
+          normalizedOptionQuestion.includes('refuse')
+        ) {
+          combinationBonus += 60;
+        }
+        if (
+          normalizedUserQuestion.includes('recent') &&
+          normalizedOptionQuestion.includes('recent')
+        ) {
+          combinationBonus += 30;
+        }
+
+        // Bonus pour les détails de chantier
+        let detailsBonus = 0;
+        if (hasProjectId && normalizedOptionQuestion.includes('[project]')) {
+          detailsBonus += 100; // Bonus très important pour les requêtes avec ID de chantier
+        }
+        if (
+          isDetailsRequest &&
+          normalizedOptionQuestion.includes('informations')
+        ) {
+          detailsBonus += 50; // Bonus pour les requêtes de détails
+        }
+
+        // Pénalité pour les mauvaises correspondances de type de document
+        let documentTypePenalty = 0;
+        if (
+          isQuotationQuestion &&
+          normalizedOptionQuestion.includes('facture')
+        ) {
+          documentTypePenalty += 100;
+        }
+        if (isInvoiceQuestion && normalizedOptionQuestion.includes('devis')) {
+          documentTypePenalty += 100;
+        }
+
+        // Pénalité pour les mauvaises correspondances de statut
+        let statusPenalty = 0;
+        if (hasStatus && !hasMatchingParamTypes) {
+          statusPenalty += 80;
+        }
+
+        // Pénalité pour les options qui ne correspondent pas au contexte
+        let contextPenalty = 0;
+        if (hasProjectId && !normalizedOptionQuestion.includes('[project]')) {
+          contextPenalty += 150; // Pénalité forte pour ignorer un ID de chantier
+        }
+        if (
+          isDetailsRequest &&
+          !normalizedOptionQuestion.includes('informations')
+        ) {
+          contextPenalty += 50; // Pénalité pour ignorer une demande de détails
+        }
 
         // Pénalité de distance réduite et plafonnée
-        const distancePenalty = Math.min(option.distance * 2, 10); // Réduit à 2 avec plafond à 10
+        const distancePenalty = Math.min(option.distance * 2, 10);
 
-        // Score final avec plus de poids sur les correspondances de mots-clés
+        // Score final avec plus de poids sur les correspondances de mots-clés et les combinaisons
         const totalScore =
-          keywordScore * 3 +
-          parameterScore * 2 +
-          parameterBonus -
+          keywordScore * 5 +
+          parameterScore * 4 +
+          parameterBonus +
+          combinationBonus +
+          detailsBonus -
+          documentTypePenalty -
+          statusPenalty -
+          contextPenalty -
           distancePenalty;
 
         this.logger.log(
-          `Option "${option.question}" - Score: ${totalScore.toFixed(2)} (keywords: ${keywordScore}, params: ${parameterScore}, bonus: ${parameterBonus}, distance: ${distancePenalty})`,
+          `Option "${option.question}" - Score: ${totalScore.toFixed(2)} (keywords: ${keywordScore}, params: ${parameterScore}, bonus: ${parameterBonus}, combination: ${combinationBonus}, details: ${detailsBonus}, docPenalty: ${documentTypePenalty}, statusPenalty: ${statusPenalty}, contextPenalty: ${contextPenalty}, distance: ${distancePenalty})`,
         );
 
         return {
