@@ -594,7 +594,17 @@ Ton paragraphe explicatif (pas plus de 5 phrases, UNIQUEMENT en français):`;
       return 'Finance';
     }
 
-    if (keys.includes('name') && keys.includes('email')) {
+    // Détection des clients (tous les clients sont juste "Customer" même avec projets)
+    if (
+      keys.includes('firstname') &&
+      keys.includes('lastname') &&
+      keys.includes('email')
+    ) {
+      return 'Customer';
+    }
+
+    // Détection des projets actifs pour les clients
+    if (keys.some((key) => key.includes('project'))) {
       return 'Customer';
     }
 
