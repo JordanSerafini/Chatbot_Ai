@@ -143,7 +143,37 @@ export class ModelController {
           this.httpService.post(querierUrl, ragResponse),
         );
 
-        return response.data;
+        // 3. Préparer une réponse complète pour le chatbot
+        const otherQuestions = ragResponse.otherQueries.map((query) => ({
+          question: query.question,
+          sql: query.sql,
+          description: query.description,
+        }));
+
+        return {
+          success: true,
+          // Résultats de l'exécution SQL
+          data: response.data.data || [],
+          count: response.data.count || 0,
+
+          // Informations sur la requête exécutée
+          selectedQuery: {
+            question: ragResponse.querySelected.question,
+            sql: ragResponse.querySelected.sql,
+            description: ragResponse.querySelected.description,
+          },
+
+          // Questions alternatives pour le chatbot
+          alternativeQuestions: otherQuestions,
+
+          // Résumé pour le chatbot
+          summary: {
+            question: queryDto.question,
+            selectedQuestion: ragResponse.querySelected.question,
+            resultsCount: response.data.data?.length || 0,
+            alternativesCount: otherQuestions.length,
+          },
+        };
       } catch (httpError) {
         this.logger.error(`HTTP error: ${httpError.message}`);
         if (httpError.response) {
@@ -155,7 +185,12 @@ export class ModelController {
         return {
           success: false,
           error: `Error executing query: ${httpError.message}`,
-          ragResponse,
+          selectedQuery: ragResponse.querySelected,
+          alternativeQuestions: ragResponse.otherQueries.map((query) => ({
+            question: query.question,
+            sql: query.sql,
+            description: query.description,
+          })),
         };
       }
     } catch (error) {
