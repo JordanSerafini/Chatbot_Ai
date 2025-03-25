@@ -17,4 +17,4 @@ RUN npm run build
 EXPOSE 3001
 
 # Start the server using the production build
-CMD ["node", "dist/main"] 
+CMD ["npm", "run", "start:dev"] 
