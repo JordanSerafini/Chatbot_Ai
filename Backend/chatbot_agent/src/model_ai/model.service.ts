@@ -40,7 +40,9 @@ export class ModelService {
   async onModuleInit() {
     this.logger.log('ModelService initialized for LM Studio');
     this.logger.log(`LM Studio URL: ${this.getLmStudioUrl()}`);
-    this.logger.log(`RAG Service URL: ${this.configService.get<string>('RAG_SERVICE_URL')}`);
+    this.logger.log(
+      `RAG Service URL: ${this.configService.get<string>('RAG_SERVICE_URL')}`,
+    );
     try {
       await this.checkLmStudioAvailability();
     } catch (error) {
@@ -85,15 +87,15 @@ ${userInput}</s>`;
       const similarQuestions = await this.getSimilarQuestions(userInput);
 
       this.logger.log(`Got ${similarQuestions?.length || 0} similar questions`);
-      
+
       if (!similarQuestions || similarQuestions.length === 0) {
         this.logger.log('No similar questions found');
         return {
           question: userInput,
-          answer: "Pas de similarité trouvée",
+          answer: 'Pas de similarité trouvée',
           source: 'direct',
           allOptions: [],
-          confidence: 0
+          confidence: 0,
         };
       }
 
@@ -119,7 +121,7 @@ VOTRE RÉPONSE (un seul chiffre):`;
 
       this.logger.log('Appel direct à LM Studio avec prompt de sélection');
       this.logger.log(`Raw prompt: ${rawSelectionPrompt}`);
-      
+
       // Configuration LM Studio pour obtenir un seul chiffre
       const lmStudioConfig = {
         max_tokens: 2,
@@ -127,12 +129,12 @@ VOTRE RÉPONSE (un seul chiffre):`;
         top_p: 1,
         frequency_penalty: 0,
         presence_penalty: 0,
-        stop: ["\n", " ", ",", "."]
+        stop: ['\n', ' ', ',', '.'],
       };
-      
+
       try {
         const lmStudioUrl = this.getLmStudioUrl();
-        
+
         const response = await axios.post(
           `${lmStudioUrl}/completions`,
           {
@@ -145,47 +147,51 @@ VOTRE RÉPONSE (un seul chiffre):`;
         );
 
         this.logger.log(`LM Studio response: ${JSON.stringify(response.data)}`);
-        
+
         const fullResponse = response.data.choices[0].text.trim();
         this.logger.log(`Raw selection response: "${fullResponse}"`);
-        
+
         const match = fullResponse.match(/^[0-5]$/);
         this.logger.log(`Matched selection: ${match ? match[0] : 'no match'}`);
-        
+
         // Trier les options par distance
-        const sortedOptions = [...similarQuestions].sort((a, b) => a.distance - b.distance);
-        const other2Query = sortedOptions.slice(0, 2).map(opt => opt.metadata.sql);
-        
+        const sortedOptions = [...similarQuestions].sort(
+          (a, b) => a.distance - b.distance,
+        );
+        const other2Query = sortedOptions
+          .slice(0, 2)
+          .map((opt) => opt.metadata.sql);
+
         if (!match || match[0] === '0') {
           this.logger.log('No sufficient match found');
           return {
             question: userInput,
-            answer: "pas de similarité",
+            answer: 'pas de similarité',
             source: 'direct',
             allOptions: similarQuestions,
             confidence: 0,
-            noQuery: "pas de similarité",
-            other2Query
+            noQuery: 'pas de similarité',
+            other2Query,
           };
         }
-        
+
         const selectedIndex = parseInt(match[0], 10) - 1;
         if (selectedIndex < 0 || selectedIndex >= similarQuestions.length) {
           this.logger.log(`Selected index ${selectedIndex} is out of bounds`);
           return {
             question: userInput,
-            answer: "pas de similarité",
+            answer: 'pas de similarité',
             source: 'direct',
             allOptions: similarQuestions,
             confidence: 0,
-            noQuery: "pas de similarité",
-            other2Query
+            noQuery: 'pas de similarité',
+            other2Query,
           };
         }
-        
+
         const selectedQuestion = similarQuestions[selectedIndex];
         this.logger.log(`Selected question: ${selectedQuestion.question}`);
-        
+
         return {
           question: userInput,
           answer: `J'ai trouvé une correspondance : ${selectedQuestion.question}`,
@@ -193,7 +199,7 @@ VOTRE RÉPONSE (un seul chiffre):`;
           selectedQuery: {
             sql: selectedQuestion.metadata.sql,
             description: selectedQuestion.metadata.description,
-            parameters: selectedQuestion.metadata.parameters || []
+            parameters: selectedQuestion.metadata.parameters || [],
           },
           allOptions: similarQuestions,
           confidence: 1 - selectedQuestion.distance,
@@ -201,18 +207,23 @@ VOTRE RÉPONSE (un seul chiffre):`;
           other2Query: sortedOptions
             .filter((_, index) => index !== selectedIndex)
             .slice(0, 2)
-            .map(opt => opt.metadata.sql)
+            .map((opt) => opt.metadata.sql),
         };
-        
       } catch (error) {
         this.logger.error(`Error in LM Studio selection: ${error.message}`);
         // En cas d'erreur, on revient à la sélection par distance
-        const sortedOptions = [...similarQuestions].sort((a, b) => a.distance - b.distance);
+        const sortedOptions = [...similarQuestions].sort(
+          (a, b) => a.distance - b.distance,
+        );
         const bestOption = sortedOptions[0];
-        const other2Query = sortedOptions.slice(1, 3).map(opt => opt.metadata.sql);
-        
-        this.logger.log(`Fallback to distance-based selection: ${bestOption.question}`);
-        
+        const other2Query = sortedOptions
+          .slice(1, 3)
+          .map((opt) => opt.metadata.sql);
+
+        this.logger.log(
+          `Fallback to distance-based selection: ${bestOption.question}`,
+        );
+
         return {
           question: userInput,
           answer: `J'ai trouvé une correspondance : ${bestOption.question}`,
@@ -220,15 +231,14 @@ VOTRE RÉPONSE (un seul chiffre):`;
           selectedQuery: {
             sql: bestOption.metadata.sql,
             description: bestOption.metadata.description,
-            parameters: bestOption.metadata.parameters || []
+            parameters: bestOption.metadata.parameters || [],
           },
           allOptions: similarQuestions,
           confidence: 1 - bestOption.distance,
           querySelected: bestOption.metadata.sql,
-          other2Query
+          other2Query,
         };
       }
-      
     } catch (error) {
       this.logger.error(`Error in generateResponse: ${error.message}`);
       throw error;
@@ -238,14 +248,14 @@ VOTRE RÉPONSE (un seul chiffre):`;
   private async selectBestMatch(
     userQuestion: string,
     options: RagQuestion[],
-    selectionPrompt: string
+    selectionPrompt: string,
   ): Promise<any> {
     try {
       this.logger.log('Starting selectBestMatch process...');
 
       const formattedPrompt = this.formatPrompt(
         `Vous êtes un système de sélection automatique qui doit choisir la question la plus similaire.`,
-        selectionPrompt
+        selectionPrompt,
       );
 
       const shortConfig = {
@@ -255,7 +265,7 @@ VOTRE RÉPONSE (un seul chiffre):`;
         top_p: 1,
         frequency_penalty: 0,
         presence_penalty: 0,
-        stop: ["\n", " ", ",", "."]
+        stop: ['\n', ' ', ',', '.'],
       };
 
       this.logger.log('Sending prompt to LM Studio:', formattedPrompt);
@@ -274,23 +284,27 @@ VOTRE RÉPONSE (un seul chiffre):`;
       const fullResponse = response.data.choices[0].text.trim();
       this.logger.log('Parsed response:', fullResponse);
       const match = fullResponse.match(/^[0-5]$/);
-      
+
       // Trier les options par distance
-      const sortedOptions = [...options].sort((a, b) => a.distance - b.distance);
-      const other2Query = sortedOptions.slice(0, 2).map(opt => opt.metadata.sql);
+      const sortedOptions = [...options].sort(
+        (a, b) => a.distance - b.distance,
+      );
+      const other2Query = sortedOptions
+        .slice(0, 2)
+        .map((opt) => opt.metadata.sql);
 
       if (!match || match[0] === '0') {
         return {
-          noQuery: "pas de similarité",
-          other2Query
+          noQuery: 'pas de similarité',
+          other2Query,
         };
       }
 
       const selectedIndex = parseInt(match[0], 10) - 1;
       if (selectedIndex < 0 || selectedIndex >= options.length) {
         return {
-          noQuery: "pas de similarité",
-          other2Query
+          noQuery: 'pas de similarité',
+          other2Query,
         };
       }
 
@@ -299,14 +313,13 @@ VOTRE RÉPONSE (un seul chiffre):`;
         other2Query: sortedOptions
           .filter((_, index) => index !== selectedIndex)
           .slice(0, 2)
-          .map(opt => opt.metadata.sql)
+          .map((opt) => opt.metadata.sql),
       };
-
     } catch (error) {
       this.logger.error(`Error in selectBestMatch: ${error.message}`);
       return {
-        noQuery: "pas de similarité",
-        other2Query: []
+        noQuery: 'pas de similarité',
+        other2Query: [],
       };
     }
   }
@@ -316,26 +329,33 @@ VOTRE RÉPONSE (un seul chiffre):`;
    */
   private async getSimilarQuestions(question: string): Promise<RagQuestion[]> {
     try {
-      const ragServiceUrl = this.configService.get<string>('RAG_SERVICE_URL') || 'http://localhost:3002';
-      this.logger.log(`Calling RAG service at ${ragServiceUrl}/rag/similar with question: ${question}`);
-      
+      const ragServiceUrl =
+        this.configService.get<string>('RAG_SERVICE_URL') ||
+        'http://localhost:3002';
+      this.logger.log(
+        `Calling RAG service at ${ragServiceUrl}/rag/similar with question: ${question}`,
+      );
+
       // Ajout de paramètres pour améliorer la recherche
       const response = await axios.post(`${ragServiceUrl}/rag/similar`, {
         question,
         nResults: 5,
         threshold: 0.3, // Seuil de similarité plus permissif
         collection: 'sql_queries', // Spécifier explicitement la collection
-        includeMetadata: true // S'assurer que les métadonnées sont incluses
+        includeMetadata: true, // S'assurer que les métadonnées sont incluses
       });
 
       if (!response.data || !Array.isArray(response.data)) {
-        this.logger.error('RAG service response is not in expected format', response.data);
+        this.logger.error(
+          'RAG service response is not in expected format',
+          response.data,
+        );
         return [];
       }
 
       const questions = response.data;
       this.logger.log(`Found ${questions.length} similar questions`);
-      
+
       // Log détaillé de chaque question trouvée
       questions.forEach((q, index) => {
         this.logger.log(`Question ${index + 1}:
@@ -346,11 +366,12 @@ VOTRE RÉPONSE (un seul chiffre):`;
       });
 
       // Vérification de la validité des questions
-      const validQuestions = questions.filter(q => 
-        q.question && 
-        q.metadata?.sql && 
-        q.metadata?.description &&
-        typeof q.distance === 'number'
+      const validQuestions = questions.filter(
+        (q) =>
+          q.question &&
+          q.metadata?.sql &&
+          q.metadata?.description &&
+          typeof q.distance === 'number',
       );
 
       if (validQuestions.length === 0) {
@@ -359,16 +380,22 @@ VOTRE RÉPONSE (un seul chiffre):`;
       }
 
       if (validQuestions.length < questions.length) {
-        this.logger.warn(`Filtered out ${questions.length - validQuestions.length} invalid questions`);
+        this.logger.warn(
+          `Filtered out ${questions.length - validQuestions.length} invalid questions`,
+        );
       }
 
       return validQuestions;
     } catch (error) {
       this.logger.error(`Error getting similar questions: ${error.message}`);
       if (error.response) {
-        this.logger.error(`Response data: ${JSON.stringify(error.response.data)}`);
+        this.logger.error(
+          `Response data: ${JSON.stringify(error.response.data)}`,
+        );
         this.logger.error(`Response status: ${error.response.status}`);
-        this.logger.error(`Response headers: ${JSON.stringify(error.response.headers)}`);
+        this.logger.error(
+          `Response headers: ${JSON.stringify(error.response.headers)}`,
+        );
       }
       if (error.request) {
         this.logger.error('Request was made but no response received');
@@ -480,12 +507,16 @@ RÈGLES:
 
 VOTRE RÉPONSE (un seul chiffre):`;
 
-    const bestMatch = await this.selectBestMatch(userQuestion, options, selectionPrompt);
-    
+    const bestMatch = await this.selectBestMatch(
+      userQuestion,
+      options,
+      selectionPrompt,
+    );
+
     if (!bestMatch) {
       return 'pas de similarité';
     }
-    
+
     return bestMatch.question;
   }
 
@@ -520,14 +551,16 @@ VOTRE RÉPONSE (un seul chiffre):`;
     try {
       const lmStudioUrl = this.getLmStudioUrl();
       this.logger.log(`Sending prompt to LM Studio:\n${prompt}`);
-      
+
       const requestBody = {
         prompt,
         model: 'deepseek-r1-distill-llama-8b',
         ...this.modelConfig,
       };
-      
-      this.logger.log(`Request configuration: ${JSON.stringify(requestBody, null, 2)}`);
+
+      this.logger.log(
+        `Request configuration: ${JSON.stringify(requestBody, null, 2)}`,
+      );
 
       const response = await axios.post(
         `${lmStudioUrl}/completions`,
@@ -537,11 +570,13 @@ VOTRE RÉPONSE (un seul chiffre):`;
         },
       );
 
-      this.logger.log(`LM Studio raw response: ${JSON.stringify(response.data, null, 2)}`);
+      this.logger.log(
+        `LM Studio raw response: ${JSON.stringify(response.data, null, 2)}`,
+      );
 
       const generatedText = response.data.choices[0].text || '';
       const cleanedText = generatedText.trim();
-      
+
       this.logger.log(`Cleaned response text: "${cleanedText}"`);
       return cleanedText;
     } catch (error) {
