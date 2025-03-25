@@ -436,53 +436,265 @@ Réponds uniquement par le numéro de l'option choisie (1, 2, 3, etc.) sans aucu
         return `Je n'ai trouvé aucun résultat pour votre question "${userQuestion}".`;
       }
 
-      // Formater les données pour le prompt
-      const formattedData = JSON.stringify(data, null, 2);
+      // Analyser les données pour vérifier s'il s'agit d'un cas particulier
+      const specialResponse = this.handleSpecialCases(
+        data,
+        userQuestion,
+        description,
+      );
+      if (specialResponse) {
+        return specialResponse;
+      }
 
-      // Préparer le prompt pour LM Studio
+      // Prétraiter les données pour une meilleure lisibilité
+      const processedData = this.preprocessData(data);
+
+      // Formater les données prétraitées pour le prompt
+      const formattedData = JSON.stringify(processedData, null, 2);
+
+      // Préparer le prompt pour LM Studio avec instructions améliorées
       const prompt = `
-Tu es un assistant d'entreprise spécialisé dans la construction et le BTP. Tu dois répondre en français à une question d'un utilisateur en te basant sur des données SQL.
+Tu es un assistant d'entreprise spécialisé dans la construction et le BTP. Réponds en français de façon directe et précise.
 
 Question de l'utilisateur: "${userQuestion}"
 
-Description de la requête SQL: "${description}"
+Description des données: "${description}"
 
-Résultats de la requête SQL (${data.length} résultats):
+Données disponibles (${processedData.length} résultats):
 ${formattedData}
 
-En tant qu'assistant, génère une réponse concise mais complète qui:
-1. Commence par une phrase d'introduction qui répond directement à la question
-2. Présente les informations importantes des résultats de manière claire et organisée
-3. Si pertinent, fournis un résumé ou une analyse des données (tendances, points importants)
-4. Utilise un ton professionnel mais conversationnel
-5. Ne mentionne pas que tu utilises des "données SQL" ou des "résultats de requête" dans ta réponse
+INSTRUCTIONS IMPORTANTES:
+1. Réponds DIRECTEMENT à la question sans phrases d'introduction inutiles 
+2. Présente l'information de façon concise, organisée et utile
+3. Formate correctement les valeurs numériques (utilise des espaces pour séparer les milliers)
+4. NE mentionne PAS les termes "requête SQL", "données", "résultats" ou tout autre terme technique
+5. NE montre JAMAIS ton raisonnement interne
+6. N'utilise PAS de balises de formatage comme <think>, **gras**, ou --- 
+7. Utilise un ton professionnel, direct et factuel
 
-Ta réponse:`;
+Ta réponse DIRECTE:`;
 
-      // Envoyer le prompt à LM Studio
+      // Envoyer le prompt à LM Studio avec des paramètres plus stricts
       const response = await axios.post(
         `${this.getLmStudioUrl()}/completions`,
         {
           prompt,
-          max_tokens: 1000,
-          temperature: 0.7,
-          top_p: 0.95,
+          max_tokens: 1500,
+          temperature: 0.3, // Réduire la température pour des réponses plus déterministes
+          top_p: 0.8,
+          frequency_penalty: 0.5, // Pénaliser les répétitions
         },
         { timeout: 60000 },
       );
 
-      // Extraire et retourner la réponse générée
-      const generatedResponse = response.data.choices[0].text.trim();
-      this.logger.log(
-        `Generated natural response of length: ${generatedResponse.length}`,
-      );
+      // Extraire et nettoyer la réponse générée
+      let generatedResponse = response.data.choices[0].text.trim();
 
+      // Nettoyage post-traitement
+      generatedResponse = this.cleanupResponse(generatedResponse);
+
+      this.logger.log(
+        `Generated clean response of length: ${generatedResponse.length}`,
+      );
       return generatedResponse;
     } catch (error) {
       this.logger.error(`Error generating natural response: ${error.message}`);
 
-      // Fallback à une réponse simple en cas d'erreur
-      return `J'ai trouvé ${data.length} résultat(s) pour votre recherche sur "${description.toLowerCase()}".`;
+      // Générer une réponse de secours si la génération par IA échoue
+      return this.generateFallbackResponse(data, userQuestion, description);
+    }
+  }
+
+  /**
+   * Traite les cas spéciaux qui nécessitent une réponse formatée spécifique
+   */
+  private handleSpecialCases(
+    data: any[],
+    question: string,
+    description: string,
+  ): string | null {
+    const lowerQuestion = question.toLowerCase();
+
+    // Cas spécial: factures impayées
+    if (
+      (lowerQuestion.includes('facture') || lowerQuestion.includes('fact')) &&
+      (lowerQuestion.includes('impayé') ||
+        lowerQuestion.includes('pas payé') ||
+        lowerQuestion.includes('en attente') ||
+        lowerQuestion.includes('non payé'))
+    ) {
+      // Filtrer les factures qui sont réellement impayées (statut n'est pas "Payée")
+      const unpaidInvoices = data.filter(
+        (invoice) => invoice.status && invoice.status.toLowerCase() !== 'payée',
+      );
+
+      if (unpaidInvoices.length === 0) {
+        return 'Bonne nouvelle ! Toutes les factures ont été payées.';
+      }
+
+      // Formater une réponse pour les factures impayées
+      let response = `Voici les ${unpaidInvoices.length} factures actuellement impayées :\n\n`;
+
+      unpaidInvoices.forEach((invoice, index) => {
+        const issueDate = invoice.issue_date
+          ? new Date(invoice.issue_date).toLocaleDateString('fr-FR')
+          : 'Date inconnue';
+        const dueDate = invoice.due_date
+          ? new Date(invoice.due_date).toLocaleDateString('fr-FR')
+          : 'Date inconnue';
+        const formattedTotalHT = invoice.total_ht
+          ? Number(invoice.total_ht).toLocaleString('fr-FR', {
+              minimumFractionDigits: 2,
+              maximumFractionDigits: 2,
+            })
+          : '0,00';
+        const formattedTotalTTC = invoice.total_ttc
+          ? Number(invoice.total_ttc).toLocaleString('fr-FR', {
+              minimumFractionDigits: 2,
+              maximumFractionDigits: 2,
+            })
+          : '0,00';
+
+        response += `${index + 1}. Facture ${invoice.reference} du ${issueDate}\n`;
+        response += `   - Client: ${invoice.client_name || 'Non spécifié'}\n`;
+        response += `   - Projet: ${invoice.project_name || 'Non spécifié'}\n`;
+        response += `   - Montant: ${formattedTotalTTC} € TTC (${formattedTotalHT} € HT)\n`;
+        response += `   - Échéance: ${dueDate}\n`;
+        response += `   - Statut: ${invoice.status}\n\n`;
+      });
+
+      response += `Total à encaisser: ${unpaidInvoices.reduce((sum, inv) => sum + Number(inv.total_ttc || 0), 0).toLocaleString('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €`;
+
+      return response;
+    }
+
+    return null;
+  }
+
+  /**
+   * Prétraitement des données pour améliorer la qualité des réponses
+   */
+  private preprocessData(data: any[]): any[] {
+    return data.map((item) => {
+      const processed = { ...item };
+
+      // Formater les dates
+      for (const [key, value] of Object.entries(processed)) {
+        if (typeof value === 'string' && value.match(/^\d{4}-\d{2}-\d{2}/)) {
+          try {
+            processed[key] = new Date(value).toLocaleDateString('fr-FR');
+          } catch (e) {
+            // Garder la valeur originale en cas d'erreur
+          }
+        }
+      }
+
+      return processed;
+    });
+  }
+
+  /**
+   * Nettoie la réponse de tout contenu non désiré
+   */
+  private cleanupResponse(response: string): string {
+    // Supprimer les balises de formatation ou de pensée
+    let cleaned = response
+      .replace(/<think>[\s\S]*?<\/think>/gi, '')
+      .replace(/\*\*(.*?)\*\*/g, '$1')
+      .replace(/^[\s-_*]+|[\s-_*]+$/gm, '')
+      .replace(/^(Réponse|RÉPONSE)\s*:/i, '')
+      .replace(/^"(.+)"$/s, '$1'); // Supprimer les guillemets englobants
+
+    // Supprimer les lignes vides multiples
+    cleaned = cleaned.replace(/\n{3,}/g, '\n\n');
+
+    // Mettre en forme les nombres dans le texte
+    cleaned = cleaned.replace(/(\d+)(\d{3})/g, '$1 $2');
+
+    return cleaned.trim();
+  }
+
+  /**
+   * Génère une réponse de secours si la génération par IA échoue
+   */
+  private generateFallbackResponse(
+    data: any[],
+    question: string,
+    description: string,
+  ): string {
+    try {
+      // Trouver des dates éventuelles
+      const dates = data
+        .filter((item) => item.date || item.issue_date || item.start_date)
+        .map((item) => item.date || item.issue_date || item.start_date)
+        .slice(0, 3);
+
+      // Trouver des noms éventuels
+      const names = data
+        .filter((item) => item.name || item.client_name || item.project_name)
+        .map((item) => item.name || item.client_name || item.project_name)
+        .slice(0, 3);
+
+      // Trouver des montants éventuels
+      const amounts = data
+        .filter(
+          (item) =>
+            item.total || item.total_ttc || item.amount || item.total_ht,
+        )
+        .map(
+          (item) =>
+            item.total || item.total_ttc || item.amount || item.total_ht,
+        )
+        .slice(0, 3);
+
+      let response = `J'ai trouvé ${data.length} information(s) concernant votre demande`;
+
+      if (description) {
+        const shortDesc =
+          description.length > 100
+            ? description.substring(0, 97) + '...'
+            : description;
+        response += ` sur ${shortDesc.toLowerCase()}`;
+      }
+
+      response += '.\n\n';
+
+      if (data.length <= 5) {
+        // Pour un petit nombre de résultats, les lister tous
+        data.forEach((item, index) => {
+          response += `Information ${index + 1}:\n`;
+
+          // Limiter à 5 propriétés par item
+          const props = Object.entries(item).slice(0, 5);
+          props.forEach(([key, value]) => {
+            if (value !== null && value !== undefined) {
+              response += `- ${key.replace(/_/g, ' ')}: ${value}\n`;
+            }
+          });
+
+          response += '\n';
+        });
+      } else {
+        // Pour un grand nombre de résultats, donner un aperçu
+        response += `Voici un aperçu des résultats :\n\n`;
+
+        if (dates.length > 0) {
+          response += `Dates: ${dates.join(', ')}\n`;
+        }
+
+        if (names.length > 0) {
+          response += `Noms: ${names.join(', ')}\n`;
+        }
+
+        if (amounts.length > 0) {
+          response += `Montants: ${amounts.join(', ')}\n`;
+        }
+      }
+
+      return response;
+    } catch (error) {
+      // En cas d'erreur dans la génération de la réponse de secours, retourner quelque chose de très basique
+      return `J'ai trouvé ${data.length} résultat(s) concernant "${question}".`;
     }
   }
 }
