@@ -1,4 +1,4 @@
-import React from "react"
+import React, { useMemo } from "react"
 
 interface ResponseData {
     [key: string]: string | number | boolean | object | null;
@@ -29,9 +29,17 @@ function Message({ response }: MessageProps) {
     // Récupérer le texte de réponse brut
     const rawResponse = response.textResponse || response.humanResponse || response.description || '';
     
+    // Extraire le type de données s'il est présent
+    const dataType = useMemo(() => {
+        const match = rawResponse.match(/<!--dataType:(.*?)-->/);
+        return match ? match[1] : 'Non spécifié';
+    }, [rawResponse]);
+    
     // Fonction pour nettoyer la réponse
     const cleanTextResponse = (text: string): string => {
         return text
+            // Supprimer le tag dataType
+            .replace(/<!--dataType:.*?-->/g, '')
             // Supprimer les parties de réflexion en anglais et les instructions
             .replace(/\[Réponse\]/g, '')
             .replace(/\[Non.*instructions\.\]/g, '')
@@ -57,6 +65,29 @@ function Message({ response }: MessageProps) {
 
     // Nettoyer la réponse
     const cleanResponse = cleanTextResponse(rawResponse);
+
+    // Obtenir une icône basée sur le type de données
+    const getDataTypeIcon = (type: string): string => {
+        switch (type) {
+            case 'Invoice':
+            case 'Invoice_Summary':
+                return '📄';
+            case 'Quotation':
+                return '📝';
+            case 'Project':
+                return '🏗️';
+            case 'Planning':
+                return '📅';
+            case 'Staff':
+                return '👷';
+            case 'Finance':
+                return '💰';
+            case 'Customer':
+                return '👤';
+            default:
+                return '📊';
+        }
+    };
 
     // Fonction pour formater le contenu en fonction du type
     const renderContent = () => {
@@ -161,6 +192,13 @@ function Message({ response }: MessageProps) {
 
     return (
         <div className="bg-white p-4 w-full rounded-lg shadow-md">
+            {/* Badge pour le type de données */}
+            <div className="flex items-center justify-start mb-2">
+                <span className="text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded-full flex items-center">
+                    {getDataTypeIcon(dataType)} <span className="ml-1">{dataType}</span>
+                </span>
+            </div>
+            
             {renderContent()}
             {Array.isArray(response.data) && response.data.length > 0 && formatData()}
         </div>

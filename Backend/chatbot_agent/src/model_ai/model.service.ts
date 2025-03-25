@@ -445,6 +445,9 @@ export class ModelService {
         return `Je n'ai trouvé aucun résultat pour votre question "${userQuestion}".`;
       }
 
+      // Détecter le type de données
+      const dataType = this.detectDataType(data);
+
       // Prétraiter les données pour une meilleure lisibilité
       const processedData = this.preprocessData(data);
 
@@ -456,11 +459,13 @@ export class ModelService {
 
       // Préparer le prompt pour le LLM avec un ton conversationnel
       const prompt = `
-Tu es un assistant d'entreprise conversationnel et amical pour une entreprise du secteur BTP. Réponds en français.
+Tu es un assistant d'entreprise conversationnel et amical pour une entreprise du secteur BTP. Réponds UNIQUEMENT en français.
 
 Question de l'utilisateur: "${userQuestion}"
 
 Description des données: "${description}"
+
+Type de données: "${dataType}"
 
 Données disponibles (${processedData.length} résultats):
 ${promptData}
@@ -476,11 +481,13 @@ INSTRUCTIONS:
 8. NE fais PAS de liste à puces ou de présentation formelle
 9. Limite-toi à un paragraphe d'environ 3-5 phrases maximum
 10. N'utilise PAS de terme technique comme "requête SQL", "données" ou "résultats"
-11. Ne mentionne PAS ton processus d'analyse ou ta réflexion, donne directement la réponse finale
-12. Évite les phrases comme "je dois maintenant analyser" ou "structure du message"
-13. Reste concis et ne tronque pas ta réponse finale
+11. Ne mentionne JAMAIS ton processus d'analyse ou ta réflexion
+12. Évite ABSOLUMENT des phrases comme "je dois maintenant analyser", "let me see", "okay", "first", etc.
+13. Ne produis JAMAIS de texte en anglais
+14. Reste concis et ne tronque pas ta réponse finale
+15. N'inclus PAS de mots comme "Taquin", des références à des dates comme "le 15 janvier 2024", ou d'autres artefacts de formatage
 
-Ton paragraphe explicatif (pas plus de 5 phrases):`;
+Ton paragraphe explicatif (pas plus de 5 phrases, UNIQUEMENT en français):`;
 
       // Envoyer le prompt à LM Studio
       const response = await axios.post(
@@ -488,7 +495,7 @@ Ton paragraphe explicatif (pas plus de 5 phrases):`;
         {
           prompt,
           max_tokens: 500,
-          temperature: 0.7, // Plus élevé pour un ton plus naturel
+          temperature: 0.7,
           top_p: 0.9,
           frequency_penalty: 0.3,
         },
@@ -499,12 +506,17 @@ Ton paragraphe explicatif (pas plus de 5 phrases):`;
       let generatedParagraph = response.data.choices[0].text.trim();
       generatedParagraph = this.cleanupResponse(generatedParagraph);
 
-      // Vérifier si le paragraphe contient des traces d'instructions ou d'analyse
+      // Vérifier si le paragraphe contient des traces d'instructions, analyse ou anglais
       if (
         generatedParagraph.includes('analyse') ||
         generatedParagraph.includes('structure') ||
         generatedParagraph.includes('Je dois') ||
-        generatedParagraph.includes('maintenant')
+        generatedParagraph.includes('maintenant') ||
+        generatedParagraph.includes('Okay,') ||
+        generatedParagraph.includes('let') ||
+        generatedParagraph.includes('first') ||
+        generatedParagraph.includes('I ') ||
+        generatedParagraph.includes('Taquin')
       ) {
         // Si oui, utiliser la réponse de secours
         generatedParagraph = this.generateSummaryFromData(
@@ -514,18 +526,79 @@ Ton paragraphe explicatif (pas plus de 5 phrases):`;
         );
       }
 
-      // Combiner le paragraphe explicatif avec les données formatées
+      // Combiner le paragraphe explicatif avec les données formatées et le type de données
       const finalResponse = `${generatedParagraph}\n\n${formattedDataString}`;
 
       this.logger.log(`Generated response with explanation and formatted data`);
-      return finalResponse;
+
+      // Ajouter un champ JSON invisible pour le type de données
+      const responseWithType = `${finalResponse}\n<!--dataType:${dataType}-->`;
+
+      return responseWithType;
     } catch (error) {
       this.logger.error(`Error generating natural response: ${error.message}`);
 
       // Fallback simple avec les données formatées
       const formattedData = this.formatDataForDisplay(data);
-      return `Voici les informations concernant votre demande sur ${description.toLowerCase()}:\n\n${formattedData}`;
+      const dataType = this.detectDataType(data);
+      return `Voici les informations concernant votre demande sur ${description.toLowerCase()}:\n\n${formattedData}\n<!--dataType:${dataType}-->`;
     }
+  }
+
+  /**
+   * Détecte le type de données basé sur les propriétés présentes
+   */
+  private detectDataType(data: any[]): string {
+    if (!data || data.length === 0) return 'Unknown';
+
+    const sample = data[0];
+    const keys = Object.keys(sample);
+
+    // Détection basée sur les clés présentes
+    if (keys.includes('invoice_count') || keys.includes('total_tva')) {
+      return 'Invoice_Summary';
+    }
+
+    if (
+      keys.includes('issue_date') &&
+      keys.includes('due_date') &&
+      keys.includes('total_ttc')
+    ) {
+      if (keys.includes('status') && sample.status === 'Devis') {
+        return 'Quotation';
+      }
+      return 'Invoice';
+    }
+
+    if (
+      keys.includes('name') &&
+      keys.includes('start_date') &&
+      keys.includes('client_name')
+    ) {
+      return 'Project';
+    }
+
+    if (keys.includes('days_worked') || keys.includes('total_hours')) {
+      return 'Planning';
+    }
+
+    if (
+      keys.includes('firstname') &&
+      keys.includes('lastname') &&
+      keys.includes('role')
+    ) {
+      return 'Staff';
+    }
+
+    if (keys.includes('payment_rate')) {
+      return 'Finance';
+    }
+
+    if (keys.includes('name') && keys.includes('email')) {
+      return 'Customer';
+    }
+
+    return 'Generic';
   }
 
   /**
@@ -766,16 +839,47 @@ Ton paragraphe explicatif (pas plus de 5 phrases):`;
    * Nettoie la réponse de tout contenu non désiré
    */
   private cleanupResponse(response: string): string {
-    // Supprimer les balises de formatation ou de pensée
+    // Supprimer le texte en anglais et les artefacts de pensée
     let cleaned = response
+      // Supprimer les balises think et les commentaires
       .replace(/<think>[\s\S]*?<\/think>/gi, '')
+      .replace(/\[.*?\]/g, '')
       .replace(/\*\*(.*?)\*\*/g, '$1')
       .replace(/^[\s-_*]+|[\s-_*]+$/gm, '')
+
+      // Supprimer les préfixes et suffixes courants dans les réponses
       .replace(/^(Réponse|RÉPONSE)\s*:/i, '')
-      .replace(/^"(.+)"$/s, '$1'); // Supprimer les guillemets englobants
+      .replace(/^"(.+)"$/s, '$1')
+      .replace(/Taquin,.*$/gm, '')
+      .replace(/le \d+ \w+ 2 \d{3}/g, '')
+
+      // Supprimer les phrases de réflexion en anglais
+      .replace(/Okay,.*$/g, '')
+      .replace(/Let me.*$/gi, '')
+      .replace(/First,.*$/gi, '')
+      .replace(/I need to.*$/gi, '')
+      .replace(/For the user.*$/gi, '')
+      .replace(/In response to.*$/gi, '')
+      .replace(/In this case.*$/gi, '')
+      .replace(/Question de.*$/gi, '')
+      .replace(/Données disponibles.*$/gis, '')
+      .replace(/Pour l("|')utilisateur.*$/gi, '')
+
+      // Supprimer les lignes avec des mots clés anglais ou métadiscours
+      .replace(
+        /^.*\b(think|First|Let|Ok|question|Looking|The|This)\b.*$/gim,
+        '',
+      )
+      .replace(/^Je me demande.*$/gim, '')
+      .replace(/^Je me souviens.*$/gim, '')
+      .replace(/^Je vous (explique|informe).*$/gim, '');
 
     // Supprimer les lignes vides multiples
     cleaned = cleaned.replace(/\n{3,}/g, '\n\n');
+
+    // Nettoyer les séquences inutiles
+    cleaned = cleaned.replace(/Il y a \d+ (résultats?|données?).*$/gim, '');
+    cleaned = cleaned.replace(/C'est une.*$/gim, '');
 
     // Mettre en forme les nombres dans le texte
     cleaned = cleaned.replace(/(\d+)(\d{3})/g, '$1 $2');
