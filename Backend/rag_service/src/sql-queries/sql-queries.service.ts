@@ -11,12 +11,18 @@ import * as path from 'path';
 import * as crypto from 'crypto';
 import { ConfigService } from '@nestjs/config';
 
-// Fonction d'embedding vide pour satisfaire le typage
-class NoOpEmbeddingFunction implements IEmbeddingFunction {
-  public generate(texts: string[]): Promise<number[][]> {
-    // Retourne un vecteur vide pour chaque texte
-    return Promise.resolve(texts.map(() => []));
-  }
+// Classe pour la gestion des hashes
+interface QueryHash {
+  id: string;
+  hash: string;
+}
+
+// Définir les types pour les métadonnées des requêtes
+interface QueryMetadata {
+  sql: string;
+  description: string;
+  parameters: string;
+  [key: string]: string | number | boolean;
 }
 
 interface QueryData {
@@ -29,16 +35,6 @@ interface QueryData {
 
 interface JsonData {
   queries: QueryData[];
-}
-
-interface QueryHash {
-  id: string;
-  hash: string;
-}
-
-interface QueryMetadata extends Metadata {
-  sql: string;
-  description: string;
 }
 
 interface HashMetadata extends Metadata {
@@ -62,7 +58,19 @@ export class SqlQueriesService {
     this.client = new ChromaClient({
       path: chromaUrl,
     });
-    this.embeddingFunction = new NoOpEmbeddingFunction();
+    // Utiliser une fonction d'embedding personnalisée
+    this.embeddingFunction = {
+      generate: (texts: string[]): Promise<number[][]> => {
+        // Implémentation simple qui génère des vecteurs aléatoires
+        return Promise.resolve(
+          texts.map(() =>
+            Array(1536)
+              .fill(0)
+              .map(() => Math.random() * 2 - 1),
+          ),
+        );
+      },
+    };
   }
 
   private calculateHash(query: QueryData): string {
@@ -210,10 +218,17 @@ export class SqlQueriesService {
 
               query.questions.forEach((question, index) => {
                 documents.push(question);
-                metadatas.push({
+
+                // Convertir les paramètres en chaîne JSON si nécessaire
+                const metadata: QueryMetadata = {
                   sql: query.sql,
                   description: query.description,
-                });
+                  parameters: query.parameters
+                    ? JSON.stringify(query.parameters)
+                    : '[]',
+                };
+
+                metadatas.push(metadata);
                 ids.push(`${query.id}-${queryIndex}-${index}`);
               });
             });
@@ -317,7 +332,7 @@ export class SqlQueriesService {
   private async getOrCreateCollection(): Promise<Collection> {
     try {
       // Simple no-op embedding function
-      const embeddingFunction = new NoOpEmbeddingFunction();
+      const embeddingFunction = this.embeddingFunction;
 
       // Vérifier si la collection existe déjà
       const collections = await this.client.listCollections();

@@ -9,6 +9,17 @@ export class ChromaService implements OnModuleInit {
   private client: ChromaClient;
   private collection: Collection | undefined;
   private readonly COLLECTION_NAME = 'questions_collection';
+  private readonly embeddingFunction = {
+    generate: (texts: string[]): Promise<number[][]> => {
+      return Promise.resolve(
+        texts.map(() =>
+          Array(1536)
+            .fill(0)
+            .map(() => Math.random() * 2 - 1),
+        ),
+      );
+    },
+  };
 
   constructor(private configService: ConfigService) {
     const chromaUrl =
@@ -33,16 +44,9 @@ export class ChromaService implements OnModuleInit {
           `Collection ${this.COLLECTION_NAME} trouvée, récupération...`,
         );
 
-        // Simple no-op embedding function pour satisfaire l'interface
-        const noopEmbeddingFunction = {
-          generate: async (texts: string[]) => {
-            return Promise.resolve(texts.map(() => []));
-          },
-        };
-
         const params: GetCollectionParams = {
           name: this.COLLECTION_NAME,
-          embeddingFunction: noopEmbeddingFunction,
+          embeddingFunction: this.embeddingFunction,
         };
 
         this.collection = await this.client.getCollection(params);
@@ -55,6 +59,7 @@ export class ChromaService implements OnModuleInit {
         this.collection = await this.client.createCollection({
           name: this.COLLECTION_NAME,
           metadata: { description: 'Collection des questions pour le chatbot' },
+          embeddingFunction: this.embeddingFunction,
         });
         this.logger.log('Collection créée avec succès');
       }
@@ -69,6 +74,7 @@ export class ChromaService implements OnModuleInit {
         this.collection = await this.client.createCollection({
           name: this.COLLECTION_NAME,
           metadata: { description: 'Collection des questions pour le chatbot' },
+          embeddingFunction: this.embeddingFunction,
         });
         this.logger.log('Collection créée avec succès (après erreur)');
       } catch (finalError) {
@@ -103,13 +109,6 @@ export class ChromaService implements OnModuleInit {
 
   async addQuestions(questions: Question[]) {
     try {
-      // Simple no-op embedding function pour satisfaire l'interface
-      const noopEmbeddingFunction = {
-        generate: async (texts: string[]) => {
-          return Promise.resolve(texts.map(() => []));
-        },
-      };
-
       if (!this.collection) {
         this.logger.warn(
           'Collection non initialisée, tentative de récupération...',
@@ -125,7 +124,7 @@ export class ChromaService implements OnModuleInit {
           // On récupère la collection existante
           const params: GetCollectionParams = {
             name: this.COLLECTION_NAME,
-            embeddingFunction: noopEmbeddingFunction,
+            embeddingFunction: this.embeddingFunction,
           };
           this.collection = await this.client.getCollection(params);
         } else {
@@ -135,6 +134,7 @@ export class ChromaService implements OnModuleInit {
             metadata: {
               description: 'Collection des questions pour le chatbot',
             },
+            embeddingFunction: this.embeddingFunction,
           });
         }
 
