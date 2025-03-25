@@ -169,6 +169,24 @@ export class ModelService {
           }
           break;
         }
+        case 'PROJECT': {
+          // Détecter un UUID de projet (format standard UUID)
+          const projectIdMatches = normalizedQuestion.match(
+            /[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}/i,
+          );
+          if (projectIdMatches) {
+            paramValue = projectIdMatches[0];
+          } else {
+            // Rechercher un nom de projet après les mots "projet" ou "chantier"
+            const projectNameMatches = normalizedQuestion.match(
+              /(?:projet|chantier)\s+([a-z0-9\s]+?)(?:\s|$)/i,
+            );
+            if (projectNameMatches) {
+              paramValue = projectNameMatches[1].trim();
+            }
+          }
+          break;
+        }
         default: {
           const genericMatches = normalizedQuestion.match(
             new RegExp(`${paramName.toLowerCase()}\\s*:?\\s*([\\w\\s-]+)`, 'i'),
