@@ -169,17 +169,20 @@ export class ModelService {
     options: RagQuestion[],
   ): Promise<RagQuestion> {
     try {
-      // Préparer le prompt pour LM Studio
-      const prompt = this.prepareSelectionPrompt(question, options);
-      this.logger.log('Sending prompt to LM Studio for selection');
+      this.logger.log(
+        'Sélection de la meilleure question via LM Studio et distance vectorielle',
+      );
 
-      // Appeler LM Studio pour évaluer la pertinence
+      // 1. Utiliser d'abord l'approche LLM - LM Studio
+      const prompt = this.prepareSelectionPrompt(question, options);
+
+      // Envoyer le prompt à LM Studio
       const response = await axios.post(
         `${this.getLmStudioUrl()}/completions`,
         {
           prompt,
           max_tokens: 10,
-          temperature: 2,
+          temperature: 0.0,
           top_p: 1.0,
         },
         { timeout: 30000 },
@@ -189,60 +192,233 @@ export class ModelService {
       const fullResponse = response.data.choices[0].text.trim();
       this.logger.log(`LM Studio response: "${fullResponse}"`);
 
-      // Extraire l'index de la question la plus pertinente
+      // Extraire l'index choisi par le LLM
       const match = fullResponse.match(/\d+/);
-      const index = match ? parseInt(match[0], 10) - 1 : 0;
+      const llmIndex = match ? parseInt(match[0], 10) - 1 : -1;
 
       // Vérifier que l'index est valide
-      if (index >= 0 && index < options.length) {
+      if (llmIndex >= 0 && llmIndex < options.length) {
         this.logger.log(
-          `Selected option ${index + 1}: "${options[index].question}"`,
+          `LLM a sélectionné l'option ${llmIndex + 1}: "${options[llmIndex].question}"`,
         );
-        return options[index];
-      } else {
-        this.logger.warn(
-          `Invalid index ${index}, falling back to distance-based selection`,
-        );
-        // Fallback: trier par distance
-        const sorted = [...options].sort((a, b) => a.distance - b.distance);
-        return sorted[0];
+
+        // Vérifier si les mots-clés temporels (mois, semaine, etc.) correspondent
+        if (this.keywordMatch(question, options[llmIndex].question)) {
+          this.logger.log(
+            'Mots-clés temporels correspondants, sélection LLM validée',
+          );
+          return options[llmIndex];
+        } else {
+          this.logger.log(
+            "Mots-clés temporels différents, passage à l'analyse secondaire",
+          );
+        }
       }
-    } catch (error) {
-      this.logger.error(
-        `Error using LM Studio for selection: ${error.message}`,
+
+      // 2. Approche par recherche de mots-clés thématiques
+      const matchedByKeywords = this.findBestMatchByKeywords(question, options);
+      if (matchedByKeywords) {
+        this.logger.log(
+          `Sélection par mots-clés: "${matchedByKeywords.question}"`,
+        );
+        return matchedByKeywords;
+      }
+
+      // 3. Fallback: trier par distance vectorielle (meilleur score de similarité)
+      this.logger.log('Fallback: sélection par distance vectorielle');
+      const sortedByDistance = [...options].sort(
+        (a, b) => a.distance - b.distance,
       );
-      if (error.response) {
-        this.logger.error(`Response status: ${error.response.status}`);
-        this.logger.error(
-          `Response data: ${JSON.stringify(error.response.data)}`,
-        );
-      }
+      return sortedByDistance[0];
+    } catch (error) {
+      this.logger.error(`Erreur lors de la sélection: ${error.message}`);
       // Fallback: trier par distance en cas d'erreur
       const sorted = [...options].sort((a, b) => a.distance - b.distance);
       return sorted[0];
     }
   }
 
+  // Vérifier si des mots-clés temporels correspondent entre la question et l'option
+  private keywordMatch(question: string, option: string): boolean {
+    // Normaliser les deux textes
+    const normalizedQuestion = question
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '');
+    const normalizedOption = option
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '');
+
+    // Détecter automatiquement les mots-clés temporels dans les questions
+    const timePatterns = [
+      { regex: /\b(aujourd[''']?hui|ce jour|journee|ajd)\b/, period: 'day' },
+      { regex: /\b(demain)\b/, period: 'tomorrow' },
+      { regex: /\b(hier)\b/, period: 'yesterday' },
+      { regex: /\b(semaine|hebdo|7 jours|sept jours)\b/, period: 'week' },
+      {
+        regex: /\b(mois|mensuel|30 jours|trente jours|ce mois)\b/,
+        period: 'month',
+      },
+      {
+        regex: /\b(annee|an|annuel|12 mois|douze mois|cette annee)\b/,
+        period: 'year',
+      },
+      { regex: /\b(trimestre|3 mois|trois mois)\b/, period: 'quarter' },
+      { regex: /\b(semestre|6 mois|six mois)\b/, period: 'semester' },
+    ];
+
+    // Détecter les périodes mentionnées dans chaque texte
+    const questionPeriods = new Set(
+      timePatterns
+        .filter((pattern) => pattern.regex.test(normalizedQuestion))
+        .map((pattern) => pattern.period),
+    );
+
+    const optionPeriods = new Set(
+      timePatterns
+        .filter((pattern) => pattern.regex.test(normalizedOption))
+        .map((pattern) => pattern.period),
+    );
+
+    // Si aucune période n'est mentionnée dans les deux, on ne peut pas juger
+    if (questionPeriods.size === 0 && optionPeriods.size === 0) {
+      return true;
+    }
+
+    // Vérifier l'intersection des périodes
+    let hasCommonPeriod = false;
+    questionPeriods.forEach((period) => {
+      if (optionPeriods.has(period)) {
+        hasCommonPeriod = true;
+      }
+    });
+
+    // S'il y a au moins une période commune, c'est un bon match
+    if (hasCommonPeriod) {
+      return true;
+    }
+
+    // Si les deux mentionnent des périodes mais aucune en commun, c'est un mauvais match
+    if (questionPeriods.size > 0 && optionPeriods.size > 0) {
+      return false;
+    }
+
+    // Cas par défaut: une seule mentionne une période, on ne peut pas être certain
+    return true;
+  }
+
+  // Trouver la meilleure correspondance par mots-clés thématiques
+  private findBestMatchByKeywords(
+    question: string,
+    options: RagQuestion[],
+  ): RagQuestion | null {
+    // Normaliser la question
+    const normalizedQuestion = question
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '');
+
+    // Extraire les mots-clés importants (enlever les mots communs)
+    const keywords = this.extractKeywords(normalizedQuestion);
+
+    // Évaluer chaque option
+    let bestScore = 0;
+    let bestMatch: RagQuestion | null = null;
+
+    for (const option of options) {
+      const normalizedOption = option.question
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '');
+      let score = 0;
+
+      // Compter combien de mots-clés correspondent
+      for (const keyword of keywords) {
+        if (normalizedOption.includes(keyword)) {
+          score += 1;
+        }
+      }
+
+      // Bonus pour les mots-clés temporels correspondants
+      if (this.keywordMatch(normalizedQuestion, normalizedOption)) {
+        score += 2;
+      }
+
+      // Si c'est un meilleur score, mettre à jour
+      if (score > bestScore) {
+        bestScore = score;
+        bestMatch = option;
+      }
+    }
+
+    return bestMatch;
+  }
+
+  // Extraire les mots-clés importants d'une question
+  private extractKeywords(text: string): string[] {
+    // Mots communs à ignorer
+    const stopwords = [
+      'le',
+      'la',
+      'les',
+      'un',
+      'une',
+      'des',
+      'du',
+      'de',
+      'a',
+      'est',
+      'sont',
+      'et',
+      'ou',
+      'que',
+      'qui',
+      'quoi',
+      'comment',
+      'quel',
+      'quelle',
+    ];
+
+    // Découper le texte en mots
+    const words = text.split(/\s+/);
+
+    // Filtrer les mots communs et courts
+    return words.filter((word) => word.length > 2 && !stopwords.includes(word));
+  }
+
   private prepareSelectionPrompt(
     question: string,
     options: RagQuestion[],
   ): string {
+    // Générer le texte des options avec leur description complète
     let optionsText = '';
     options.forEach((option, index) => {
-      optionsText += `${index + 1}) "${option.question}" (score de similarité: ${(1 - option.distance).toFixed(2)})\n`;
+      optionsText += `Option ${index + 1}:
+- QUESTION: "${option.question}"
+- DESCRIPTION: "${option.metadata.description}"
+- SCORE DE SIMILARITÉ: ${(1 - option.distance).toFixed(2)}
+`;
     });
-    
-    return `Tu es un assistant SQL spécialisé qui aide à sélectionner la question la plus pertinente par rapport à la requête de l'utilisateur.
 
-Question de l'utilisateur: "${question}"
+    return `Tu es un assistant SQL spécialisé qui aide à comprendre les intentions des utilisateurs.
 
-Voici les questions similaires disponibles (avec leur score de similarité calculé par distance vectorielle):
+QUESTION DE L'UTILISATEUR: "${question}"
+
+TÂCHE:
+Analyse attentivement la question de l'utilisateur et détermine quelle option répond le mieux à son besoin réel.
+
+OPTIONS DISPONIBLES:
 ${optionsText}
 
-Ta tâche:
-1. Analyse attentivement la question de l'utilisateur
-2. Compare-la avec chaque option proposée
-3. Sélectionne l'option qui correspond le mieux à l'intention et au besoin de l'utilisateur
-`;
+INSTRUCTIONS DÉTAILLÉES:
+1. Analyse la sémantique et l'intention réelle de la question de l'utilisateur
+2. Identifie les concepts clés (dates, périodes, entités) mentionnés dans la question
+3. Compare ces concepts avec chaque option (question ET description)
+4. Accorde plus d'importance à la compréhension de l'intention qu'au score de similarité
+5. Prête attention particulière aux éléments temporels (aujourd'hui, demain, semaine, mois)
+
+RÉPONSE:
+Réponds uniquement par le numéro de l'option choisie (1, 2, 3, etc.) sans aucune explication ni justification.`;
   }
 }
