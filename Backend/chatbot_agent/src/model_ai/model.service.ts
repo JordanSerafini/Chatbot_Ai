@@ -92,7 +92,7 @@ export class ModelService {
       }
 
       // 2. Select best match using LM Studio
-      const bestMatch = await this.selectBestMatch(question, similarQuestions);
+      const bestMatch = this.selectBestMatch(question, similarQuestions);
       this.logger.log(`Selected best match: ${bestMatch.question}`);
 
       // 3. Prepare other options avec toutes les informations
@@ -164,72 +164,69 @@ export class ModelService {
     }
   }
 
-  private async selectBestMatch(
+  private selectBestMatch(
     question: string,
     options: RagQuestion[],
-  ): Promise<RagQuestion> {
+  ): RagQuestion {
     try {
+      this.logger.log(`Comparaison directe avec question: "${question}"`);
+
+      // Normaliser la question de l'utilisateur
+      const normalizedUserQuestion = question
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '');
+
+      this.logger.log(`Question normalisée: "${normalizedUserQuestion}"`);
+
+      // Filtrer les mots clés significatifs
+      const keywords = this.extractSignificantKeywords(normalizedUserQuestion);
+      this.logger.log(`Mots-clés extraits: ${keywords.join(', ')}`);
+
+      // Comparer avec chaque option
+      const scoredOptions = options.map((option) => {
+        // Normaliser la question de l'option
+        const normalizedOptionQuestion = option.question
+          .toLowerCase()
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '');
+
+        // Analyse de correspondance des mots-clés
+        const matchScore = this.calculateKeywordMatchScore(
+          keywords,
+          normalizedOptionQuestion,
+        );
+
+        // Analyse de correspondance des dates/périodes
+        const timeMatch = this.containsSameTimeReferences(
+          normalizedUserQuestion,
+          normalizedOptionQuestion,
+        );
+        const timeBonus = timeMatch ? 5 : 0;
+
+        // Score final combiné
+        const totalScore = matchScore + timeBonus - option.distance;
+
+        this.logger.log(
+          `Option "${option.question}" - Score: ${totalScore} (match: ${matchScore}, time: ${timeBonus}, distance: ${option.distance})`,
+        );
+
+        return {
+          option,
+          score: totalScore,
+        };
+      });
+
+      // Trier par score
+      scoredOptions.sort((a, b) => b.score - a.score);
+
+      // Prendre la meilleure option
+      const bestOption = scoredOptions[0].option;
       this.logger.log(
-        'Sélection de la meilleure question via LM Studio et distance vectorielle',
+        `Meilleure option sélectionnée: "${bestOption.question}"`,
       );
 
-      // 1. Utiliser d'abord l'approche LLM - LM Studio
-      const prompt = this.prepareSelectionPrompt(question, options);
-
-      // Envoyer le prompt à LM Studio
-      const response = await axios.post(
-        `${this.getLmStudioUrl()}/completions`,
-        {
-          prompt,
-          max_tokens: 10,
-          temperature: 0.0,
-          top_p: 1.0,
-        },
-        { timeout: 30000 },
-      );
-
-      // Extraire la réponse
-      const fullResponse = response.data.choices[0].text.trim();
-      this.logger.log(`LM Studio response: "${fullResponse}"`);
-
-      // Extraire l'index choisi par le LLM
-      const match = fullResponse.match(/\d+/);
-      const llmIndex = match ? parseInt(match[0], 10) - 1 : -1;
-
-      // Vérifier que l'index est valide
-      if (llmIndex >= 0 && llmIndex < options.length) {
-        this.logger.log(
-          `LLM a sélectionné l'option ${llmIndex + 1}: "${options[llmIndex].question}"`,
-        );
-
-        // Vérifier si les mots-clés temporels (mois, semaine, etc.) correspondent
-        if (this.keywordMatch(question, options[llmIndex].question)) {
-          this.logger.log(
-            'Mots-clés temporels correspondants, sélection LLM validée',
-          );
-          return options[llmIndex];
-        } else {
-          this.logger.log(
-            "Mots-clés temporels différents, passage à l'analyse secondaire",
-          );
-        }
-      }
-
-      // 2. Approche par recherche de mots-clés thématiques
-      const matchedByKeywords = this.findBestMatchByKeywords(question, options);
-      if (matchedByKeywords) {
-        this.logger.log(
-          `Sélection par mots-clés: "${matchedByKeywords.question}"`,
-        );
-        return matchedByKeywords;
-      }
-
-      // 3. Fallback: trier par distance vectorielle (meilleur score de similarité)
-      this.logger.log('Fallback: sélection par distance vectorielle');
-      const sortedByDistance = [...options].sort(
-        (a, b) => a.distance - b.distance,
-      );
-      return sortedByDistance[0];
+      return bestOption;
     } catch (error) {
       this.logger.error(`Erreur lors de la sélection: ${error.message}`);
       // Fallback: trier par distance en cas d'erreur
@@ -238,126 +235,9 @@ export class ModelService {
     }
   }
 
-  // Vérifier si des mots-clés temporels correspondent entre la question et l'option
-  private keywordMatch(question: string, option: string): boolean {
-    // Normaliser les deux textes
-    const normalizedQuestion = question
-      .toLowerCase()
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '');
-    const normalizedOption = option
-      .toLowerCase()
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '');
-
-    // Détecter automatiquement les mots-clés temporels dans les questions
-    const timePatterns = [
-      { regex: /\b(aujourd[''']?hui|ce jour|journee|ajd)\b/, period: 'day' },
-      { regex: /\b(demain)\b/, period: 'tomorrow' },
-      { regex: /\b(hier)\b/, period: 'yesterday' },
-      { regex: /\b(semaine|hebdo|7 jours|sept jours)\b/, period: 'week' },
-      {
-        regex: /\b(mois|mensuel|30 jours|trente jours|ce mois)\b/,
-        period: 'month',
-      },
-      {
-        regex: /\b(annee|an|annuel|12 mois|douze mois|cette annee)\b/,
-        period: 'year',
-      },
-      { regex: /\b(trimestre|3 mois|trois mois)\b/, period: 'quarter' },
-      { regex: /\b(semestre|6 mois|six mois)\b/, period: 'semester' },
-    ];
-
-    // Détecter les périodes mentionnées dans chaque texte
-    const questionPeriods = new Set(
-      timePatterns
-        .filter((pattern) => pattern.regex.test(normalizedQuestion))
-        .map((pattern) => pattern.period),
-    );
-
-    const optionPeriods = new Set(
-      timePatterns
-        .filter((pattern) => pattern.regex.test(normalizedOption))
-        .map((pattern) => pattern.period),
-    );
-
-    // Si aucune période n'est mentionnée dans les deux, on ne peut pas juger
-    if (questionPeriods.size === 0 && optionPeriods.size === 0) {
-      return true;
-    }
-
-    // Vérifier l'intersection des périodes
-    let hasCommonPeriod = false;
-    questionPeriods.forEach((period) => {
-      if (optionPeriods.has(period)) {
-        hasCommonPeriod = true;
-      }
-    });
-
-    // S'il y a au moins une période commune, c'est un bon match
-    if (hasCommonPeriod) {
-      return true;
-    }
-
-    // Si les deux mentionnent des périodes mais aucune en commun, c'est un mauvais match
-    if (questionPeriods.size > 0 && optionPeriods.size > 0) {
-      return false;
-    }
-
-    // Cas par défaut: une seule mentionne une période, on ne peut pas être certain
-    return true;
-  }
-
-  // Trouver la meilleure correspondance par mots-clés thématiques
-  private findBestMatchByKeywords(
-    question: string,
-    options: RagQuestion[],
-  ): RagQuestion | null {
-    // Normaliser la question
-    const normalizedQuestion = question
-      .toLowerCase()
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '');
-
-    // Extraire les mots-clés importants (enlever les mots communs)
-    const keywords = this.extractKeywords(normalizedQuestion);
-
-    // Évaluer chaque option
-    let bestScore = 0;
-    let bestMatch: RagQuestion | null = null;
-
-    for (const option of options) {
-      const normalizedOption = option.question
-        .toLowerCase()
-        .normalize('NFD')
-        .replace(/[\u0300-\u036f]/g, '');
-      let score = 0;
-
-      // Compter combien de mots-clés correspondent
-      for (const keyword of keywords) {
-        if (normalizedOption.includes(keyword)) {
-          score += 1;
-        }
-      }
-
-      // Bonus pour les mots-clés temporels correspondants
-      if (this.keywordMatch(normalizedQuestion, normalizedOption)) {
-        score += 2;
-      }
-
-      // Si c'est un meilleur score, mettre à jour
-      if (score > bestScore) {
-        bestScore = score;
-        bestMatch = option;
-      }
-    }
-
-    return bestMatch;
-  }
-
-  // Extraire les mots-clés importants d'une question
-  private extractKeywords(text: string): string[] {
-    // Mots communs à ignorer
+  // Extraire les mots-clés significatifs de la question
+  private extractSignificantKeywords(text: string): string[] {
+    // Mots à ignorer (stopwords)
     const stopwords = [
       'le',
       'la',
@@ -368,8 +248,9 @@ export class ModelService {
       'du',
       'de',
       'a',
-      'est',
-      'sont',
+      'à',
+      'au',
+      'aux',
       'et',
       'ou',
       'que',
@@ -378,48 +259,176 @@ export class ModelService {
       'comment',
       'quel',
       'quelle',
+      'quels',
+      'quelles',
+      'ce',
+      'cette',
+      'ces',
+      'mon',
+      'ma',
+      'mes',
+      'ton',
+      'ta',
+      'tes',
+      'son',
+      'sa',
+      'ses',
+      'pour',
+      'par',
+      'avec',
+      'sans',
+      'dans',
+      'sur',
+      'sous',
+      'entre',
+      'vers',
+      'chez',
+      'est',
+      'sont',
+      'suis',
+      'es',
+      'sommes',
+      'êtes',
+      'être',
+      'avoir',
+      'ai',
+      'as',
+      'avons',
+      'avez',
+      'ont',
+      'je',
+      'tu',
+      'il',
+      'elle',
+      'nous',
+      'vous',
+      'ils',
+      'elles',
     ];
 
-    // Découper le texte en mots
+    // Mots particulièrement importants à mettre en valeur
+    const importantWords = [
+      'total',
+      'cumul',
+      'cumulé',
+      'montant',
+      'somme',
+      'devis',
+      'facture',
+      'facturé',
+      'tva',
+      'ht',
+      'ttc',
+      'janvier',
+      'fevrier',
+      'mars',
+      'avril',
+      'mai',
+      'juin',
+      'juillet',
+      'aout',
+      'septembre',
+      'octobre',
+      'novembre',
+      'decembre',
+      '2023',
+      '2024',
+      '2025',
+      '2026',
+    ];
+
+    // Découper en mots
     const words = text.split(/\s+/);
 
-    // Filtrer les mots communs et courts
-    return words.filter((word) => word.length > 2 && !stopwords.includes(word));
+    // Filtrer et pondérer
+    const keywords = words
+      .filter((word) => word.length > 2 && !stopwords.includes(word))
+      .map((word) => {
+        // Donner plus d'importance aux mots clés
+        if (importantWords.some((important) => word.includes(important))) {
+          return word.trim();
+        }
+        return word.trim();
+      });
+
+    return keywords;
   }
 
-  private prepareSelectionPrompt(
-    question: string,
-    options: RagQuestion[],
-  ): string {
-    // Générer le texte des options avec leur description complète
-    let optionsText = '';
-    options.forEach((option, index) => {
-      optionsText += `Option ${index + 1}:
-- QUESTION: "${option.question}"
-- DESCRIPTION: "${option.metadata.description}"
-- SCORE DE SIMILARITÉ: ${(1 - option.distance).toFixed(2)}
-`;
-    });
+  // Calcule un score de correspondance basé sur les mots-clés
+  private calculateKeywordMatchScore(keywords: string[], text: string): number {
+    let score = 0;
 
-    return `Tu es un assistant SQL spécialisé qui aide à comprendre les intentions des utilisateurs.
+    for (const keyword of keywords) {
+      if (text.includes(keyword)) {
+        // Donner plus de poids aux mots significatifs
+        if (
+          [
+            'total',
+            'cumul',
+            'cumulé',
+            'montant',
+            'somme',
+            'tva',
+            'ttc',
+            'ht',
+          ].includes(keyword)
+        ) {
+          score += 3;
+        } else if (
+          ['devis', 'facture', 'facturé', 'période'].includes(keyword)
+        ) {
+          score += 2;
+        } else {
+          score += 1;
+        }
+      }
+    }
 
-QUESTION DE L'UTILISATEUR: "${question}"
+    return score;
+  }
 
-TÂCHE:
-Analyse attentivement la question de l'utilisateur et détermine quelle option répond le mieux à son besoin réel.
+  // Vérifie si les deux textes contiennent les mêmes références temporelles
+  private containsSameTimeReferences(text1: string, text2: string): boolean {
+    // Vérifier les années
+    const years = ['2023', '2024', '2025', '2026'];
 
-OPTIONS DISPONIBLES:
-${optionsText}
+    for (const year of years) {
+      const hasYear1 = text1.includes(year);
+      const hasYear2 = text2.includes(year);
 
-INSTRUCTIONS DÉTAILLÉES:
-1. Analyse la sémantique et l'intention réelle de la question de l'utilisateur
-2. Identifie les concepts clés (dates, périodes, entités) mentionnés dans la question
-3. Compare ces concepts avec chaque option (question ET description)
-4. Accorde plus d'importance à la compréhension de l'intention qu'au score de similarité
-5. Prête attention particulière aux éléments temporels (aujourd'hui, demain, semaine, mois)
+      // Si les deux textes mentionnent la même année, c'est un bon match
+      if (hasYear1 && hasYear2) {
+        return true;
+      }
 
-RÉPONSE:
-Réponds uniquement par le numéro de l'option choisie (1, 2, 3, etc.) sans aucune explication ni justification.`;
+      // Si un seul des textes mentionne une année mais pas l'autre, c'est un mauvais match
+      if (
+        (hasYear1 && !text2.includes('année')) ||
+        (hasYear2 && !text1.includes('année'))
+      ) {
+        return false;
+      }
+    }
+
+    // Vérifier les périodes
+    const periods = [
+      { words: ['jour', 'journée', 'aujourd'], type: 'day' },
+      { words: ['semaine', 'hebdo'], type: 'week' },
+      { words: ['mois', 'mensuel'], type: 'month' },
+      { words: ['trimestre'], type: 'quarter' },
+      { words: ['année', 'annuel'], type: 'year' },
+    ];
+
+    for (const period of periods) {
+      const hasPeriod1 = period.words.some((word) => text1.includes(word));
+      const hasPeriod2 = period.words.some((word) => text2.includes(word));
+
+      if (hasPeriod1 && hasPeriod2) {
+        return true;
+      }
+    }
+
+    return false;
   }
 
   async generateNaturalResponse(
@@ -436,139 +445,299 @@ Réponds uniquement par le numéro de l'option choisie (1, 2, 3, etc.) sans aucu
         return `Je n'ai trouvé aucun résultat pour votre question "${userQuestion}".`;
       }
 
-      // Analyser les données pour vérifier s'il s'agit d'un cas particulier
-      const specialResponse = this.handleSpecialCases(
-        data,
-        userQuestion,
-        description,
-      );
-      if (specialResponse) {
-        return specialResponse;
-      }
-
       // Prétraiter les données pour une meilleure lisibilité
       const processedData = this.preprocessData(data);
 
-      // Formater les données prétraitées pour le prompt
-      const formattedData = JSON.stringify(processedData, null, 2);
+      // Préparer une version de données formatées pour l'affichage
+      const formattedDataString = this.formatDataForDisplay(data);
 
-      // Préparer le prompt pour LM Studio avec instructions améliorées
+      // Formater les données prétraitées pour le prompt
+      const promptData = JSON.stringify(processedData, null, 2);
+
+      // Préparer le prompt pour le LLM avec un ton conversationnel
       const prompt = `
-Tu es un assistant d'entreprise spécialisé dans la construction et le BTP. Réponds en français de façon directe et précise.
+Tu es un assistant d'entreprise conversationnel et amical pour une entreprise du secteur BTP. Réponds en français.
 
 Question de l'utilisateur: "${userQuestion}"
 
 Description des données: "${description}"
 
 Données disponibles (${processedData.length} résultats):
-${formattedData}
+${promptData}
 
-INSTRUCTIONS IMPORTANTES:
-1. Réponds DIRECTEMENT à la question sans phrases d'introduction inutiles 
-2. Présente l'information de façon concise, organisée et utile
-3. Formate correctement les valeurs numériques (utilise des espaces pour séparer les milliers)
-4. NE mentionne PAS les termes "requête SQL", "données", "résultats" ou tout autre terme technique
-5. NE montre JAMAIS ton raisonnement interne
-6. N'utilise PAS de balises de formatage comme <think>, **gras**, ou --- 
-7. Utilise un ton professionnel, direct et factuel
+INSTRUCTIONS:
+1. Écris UN SEUL paragraphe conversationnel qui explique les données ci-dessus de manière claire et concise
+2. Utilise un ton amical et naturel, comme si tu parlais à un collègue
+3. Ne commence pas par "Voici les résultats" ou "J'ai trouvé"
+4. Mentionne les informations les plus pertinentes et les tendances notables
+5. N'oublie pas de mentionner le nombre total d'éléments trouvés
+6. Format les montants avec des espaces pour séparer les milliers (ex: 10 000 €)
+7. NE liste PAS les éléments individuels, fais juste un résumé global
+8. NE fais PAS de liste à puces ou de présentation formelle
+9. Limite-toi à un paragraphe d'environ 3-5 phrases maximum
+10. N'utilise PAS de terme technique comme "requête SQL", "données" ou "résultats"
+11. Ne mentionne PAS ton processus d'analyse ou ta réflexion, donne directement la réponse finale
+12. Évite les phrases comme "je dois maintenant analyser" ou "structure du message"
+13. Reste concis et ne tronque pas ta réponse finale
 
-Ta réponse DIRECTE:`;
+Ton paragraphe explicatif (pas plus de 5 phrases):`;
 
-      // Envoyer le prompt à LM Studio avec des paramètres plus stricts
+      // Envoyer le prompt à LM Studio
       const response = await axios.post(
         `${this.getLmStudioUrl()}/completions`,
         {
           prompt,
-          max_tokens: 1500,
-          temperature: 0.3, // Réduire la température pour des réponses plus déterministes
-          top_p: 0.8,
-          frequency_penalty: 0.5, // Pénaliser les répétitions
+          max_tokens: 500,
+          temperature: 0.7, // Plus élevé pour un ton plus naturel
+          top_p: 0.9,
+          frequency_penalty: 0.3,
         },
-        { timeout: 60000 },
+        { timeout: 30000 },
       );
 
-      // Extraire et nettoyer la réponse générée
-      let generatedResponse = response.data.choices[0].text.trim();
+      // Extraire et nettoyer le paragraphe généré
+      let generatedParagraph = response.data.choices[0].text.trim();
+      generatedParagraph = this.cleanupResponse(generatedParagraph);
 
-      // Nettoyage post-traitement
-      generatedResponse = this.cleanupResponse(generatedResponse);
+      // Vérifier si le paragraphe contient des traces d'instructions ou d'analyse
+      if (
+        generatedParagraph.includes('analyse') ||
+        generatedParagraph.includes('structure') ||
+        generatedParagraph.includes('Je dois') ||
+        generatedParagraph.includes('maintenant')
+      ) {
+        // Si oui, utiliser la réponse de secours
+        generatedParagraph = this.generateSummaryFromData(
+          data,
+          userQuestion,
+          description,
+        );
+      }
 
-      this.logger.log(
-        `Generated clean response of length: ${generatedResponse.length}`,
-      );
-      return generatedResponse;
+      // Combiner le paragraphe explicatif avec les données formatées
+      const finalResponse = `${generatedParagraph}\n\n${formattedDataString}`;
+
+      this.logger.log(`Generated response with explanation and formatted data`);
+      return finalResponse;
     } catch (error) {
       this.logger.error(`Error generating natural response: ${error.message}`);
 
-      // Générer une réponse de secours si la génération par IA échoue
-      return this.generateFallbackResponse(data, userQuestion, description);
+      // Fallback simple avec les données formatées
+      const formattedData = this.formatDataForDisplay(data);
+      return `Voici les informations concernant votre demande sur ${description.toLowerCase()}:\n\n${formattedData}`;
     }
   }
 
   /**
-   * Traite les cas spéciaux qui nécessitent une réponse formatée spécifique
+   * Génère un résumé structuré à partir des données
    */
-  private handleSpecialCases(
+  private generateSummaryFromData(
     data: any[],
     question: string,
     description: string,
-  ): string | null {
-    const lowerQuestion = question.toLowerCase();
+  ): string {
+    try {
+      // Détecter si ce sont des données de TVA/factures ou de chantiers
+      const isTvaData = data.length > 0 && data[0].month_name !== undefined;
+      const isProjectData =
+        data.length > 0 &&
+        data[0].name !== undefined &&
+        data[0].start_date !== undefined;
 
-    // Cas spécial: factures impayées
-    if (
-      (lowerQuestion.includes('facture') || lowerQuestion.includes('fact')) &&
-      (lowerQuestion.includes('impayé') ||
-        lowerQuestion.includes('pas payé') ||
-        lowerQuestion.includes('en attente') ||
-        lowerQuestion.includes('non payé'))
-    ) {
-      // Filtrer les factures qui sont réellement impayées (statut n'est pas "Payée")
-      const unpaidInvoices = data.filter(
-        (invoice) => invoice.status && invoice.status.toLowerCase() !== 'payée',
-      );
+      // Cas des données de TVA par mois
+      if (isTvaData) {
+        // Filtrer les données pour 2025
+        const data2025 = data.filter(
+          (item) => item.month_name && item.month_name.includes('2025'),
+        );
 
-      if (unpaidInvoices.length === 0) {
-        return 'Bonne nouvelle ! Toutes les factures ont été payées.';
+        // Calculer le total pour 2025
+        let totalAmount = 0;
+        let totalCount = 0;
+
+        if (data2025.length > 0) {
+          data2025.forEach((item) => {
+            totalAmount += parseFloat(item.total_tva || '0');
+            totalCount += parseInt(item.invoice_count || '0', 10);
+          });
+        }
+
+        // Construire la réponse
+        let summary = '';
+
+        if (question.toLowerCase().includes('2025')) {
+          summary = `Pour l'année 2025, le montant cumulé de TVA s'élève à ${totalAmount.toLocaleString(
+            'fr-FR',
+            {
+              minimumFractionDigits: 2,
+              maximumFractionDigits: 2,
+            },
+          )} € réparti sur ${totalCount} factures. `;
+        } else {
+          summary = `Sur les 12 derniers mois, nous avons enregistré ${data.length} périodes avec un total de TVA variable selon ${description}. `;
+        }
+
+        // Ajouter des détails sur le mois le plus important
+        const maxMonth = [...data].sort(
+          (a, b) =>
+            parseFloat(b.total_tva || '0') - parseFloat(a.total_tva || '0'),
+        )[0];
+
+        if (maxMonth) {
+          summary += `${maxMonth.month_name.trim()} est la période la plus importante avec ${parseFloat(
+            maxMonth.total_tva,
+          ).toLocaleString('fr-FR', {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2,
+          })} € de TVA sur ${maxMonth.invoice_count} facture(s). `;
+        }
+
+        // Mentionner les anomalies si présentes
+        const negativeMonths = data.filter(
+          (item) => parseFloat(item.total_tva || '0') < 0,
+        );
+        if (negativeMonths.length > 0) {
+          summary += `Attention, ${negativeMonths.length} mois présente(nt) des montants négatifs, notamment ${negativeMonths[0].month_name.trim()} avec ${parseFloat(
+            negativeMonths[0].total_tva,
+          ).toLocaleString('fr-FR', {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2,
+          })} €.`;
+        }
+
+        return summary.trim();
       }
+      // Cas des données de chantiers/projets
+      else if (isProjectData) {
+        // Formatage des dates
+        const formattedProjects = data.map((project) => {
+          const date = new Date(project.start_date);
+          return {
+            ...project,
+            formatted_date: date.toLocaleDateString('fr-FR'),
+          };
+        });
 
-      // Formater une réponse pour les factures impayées
-      let response = `Voici les ${unpaidInvoices.length} factures actuellement impayées :\n\n`;
+        // Construire la réponse
+        let summary = '';
 
-      unpaidInvoices.forEach((invoice, index) => {
-        const issueDate = invoice.issue_date
-          ? new Date(invoice.issue_date).toLocaleDateString('fr-FR')
-          : 'Date inconnue';
-        const dueDate = invoice.due_date
-          ? new Date(invoice.due_date).toLocaleDateString('fr-FR')
-          : 'Date inconnue';
-        const formattedTotalHT = invoice.total_ht
-          ? Number(invoice.total_ht).toLocaleString('fr-FR', {
+        // Résumé du nombre et période
+        if (question.toLowerCase().includes('mois')) {
+          const currentMonth = new Date().toLocaleString('fr-FR', {
+            month: 'long',
+          });
+          summary = `Ce mois de ${currentMonth}, ${data.length} chantier${data.length > 1 ? 's' : ''} ${data.length > 1 ? 'sont prévus' : 'est prévu'} selon ${description}. `;
+        } else {
+          summary = `Actuellement, ${data.length} projet${data.length > 1 ? 's sont planifiés' : ' est planifié'} selon ${description}. `;
+        }
+
+        // Ajouter les noms des projets si peu nombreux
+        if (data.length <= 3) {
+          const projectNames = formattedProjects.map((p) => p.name);
+          summary += `Il s'agit de ${projectNames.join(', ')}. `;
+        }
+
+        // Ajouter la ville si tous les projets sont dans la même ville
+        const cities = [
+          ...new Set(
+            formattedProjects.filter((p) => p.city).map((p) => p.city),
+          ),
+        ];
+        if (cities.length === 1) {
+          summary += `Tous ces chantiers sont situés à ${cities[0]}. `;
+        }
+
+        return summary.trim();
+      }
+      // Cas par défaut
+      else {
+        return `Nous avons trouvé ${data.length} résultat(s) concernant ${description.toLowerCase()}.`;
+      }
+    } catch (error) {
+      this.logger.error(`Error in generateSummaryFromData: ${error.message}`);
+      return `Les données montrent un total de ${data.length} résultat(s) concernant ${description.toLowerCase()}.`;
+    }
+  }
+
+  /**
+   * Formatage des données pour l'affichage
+   */
+  private formatDataForDisplay(data: any[]): string {
+    if (!data || data.length === 0) return '';
+
+    let result = '';
+
+    // Formatter chaque élément
+    data.forEach((item, index) => {
+      result += `${index + 1}. `;
+
+      // Obtenir les propriétés triées, avec priorité à certaines propriétés importantes
+      const priorityKeys = [
+        'reference',
+        'name',
+        'client_name',
+        'issue_date',
+        'due_date',
+        'total_ttc',
+        'status',
+      ];
+      const otherKeys = Object.keys(item).filter(
+        (key) => !priorityKeys.includes(key),
+      );
+      const sortedKeys = [
+        ...priorityKeys.filter((key) => item[key] !== undefined),
+        ...otherKeys,
+      ];
+
+      const formattedProperties = sortedKeys.map((key) => {
+        let value = item[key];
+
+        // Formatter les dates
+        if (typeof value === 'string' && value.match(/^\d{4}-\d{2}-\d{2}/)) {
+          const dateObj = new Date(value);
+          // Vérifier si la date est valide avant de la formater
+          if (!isNaN(dateObj.getTime())) {
+            value = dateObj.toLocaleDateString('fr-FR');
+          }
+        }
+
+        // Formatter les montants
+        if (
+          typeof value === 'string' &&
+          (key.includes('total') ||
+            key.includes('amount') ||
+            key.includes('prix')) &&
+          !isNaN(parseFloat(value))
+        ) {
+          const numVal = parseFloat(value);
+          value =
+            numVal.toLocaleString('fr-FR', {
               minimumFractionDigits: 2,
               maximumFractionDigits: 2,
-            })
-          : '0,00';
-        const formattedTotalTTC = invoice.total_ttc
-          ? Number(invoice.total_ttc).toLocaleString('fr-FR', {
-              minimumFractionDigits: 2,
-              maximumFractionDigits: 2,
-            })
-          : '0,00';
+            }) + ' €';
+        }
 
-        response += `${index + 1}. Facture ${invoice.reference} du ${issueDate}\n`;
-        response += `   - Client: ${invoice.client_name || 'Non spécifié'}\n`;
-        response += `   - Projet: ${invoice.project_name || 'Non spécifié'}\n`;
-        response += `   - Montant: ${formattedTotalTTC} € TTC (${formattedTotalHT} € HT)\n`;
-        response += `   - Échéance: ${dueDate}\n`;
-        response += `   - Statut: ${invoice.status}\n\n`;
+        const displayKey = key.replace(/_/g, ' ');
+        // S'assurer que la valeur est correctement convertie en chaîne
+        let displayValue: string;
+        if (value === null) {
+          displayValue = 'Non défini';
+        } else if (typeof value === 'object') {
+          try {
+            displayValue = JSON.stringify(value);
+          } catch {
+            displayValue = '[Objet complexe]';
+          }
+        } else {
+          displayValue = String(value);
+        }
+        return `${displayKey}: ${displayValue}`;
       });
 
-      response += `Total à encaisser: ${unpaidInvoices.reduce((sum, inv) => sum + Number(inv.total_ttc || 0), 0).toLocaleString('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €`;
+      result += formattedProperties.join(' | ') + '\n';
+    });
 
-      return response;
-    }
-
-    return null;
+    return result;
   }
 
   /**
@@ -581,10 +750,10 @@ Ta réponse DIRECTE:`;
       // Formater les dates
       for (const [key, value] of Object.entries(processed)) {
         if (typeof value === 'string' && value.match(/^\d{4}-\d{2}-\d{2}/)) {
-          try {
-            processed[key] = new Date(value).toLocaleDateString('fr-FR');
-          } catch (e) {
-            // Garder la valeur originale en cas d'erreur
+          const dateObj = new Date(value);
+          // Vérifier si la date est valide avant de la formater
+          if (!isNaN(dateObj.getTime())) {
+            processed[key] = dateObj.toLocaleDateString('fr-FR');
           }
         }
       }
@@ -612,89 +781,5 @@ Ta réponse DIRECTE:`;
     cleaned = cleaned.replace(/(\d+)(\d{3})/g, '$1 $2');
 
     return cleaned.trim();
-  }
-
-  /**
-   * Génère une réponse de secours si la génération par IA échoue
-   */
-  private generateFallbackResponse(
-    data: any[],
-    question: string,
-    description: string,
-  ): string {
-    try {
-      // Trouver des dates éventuelles
-      const dates = data
-        .filter((item) => item.date || item.issue_date || item.start_date)
-        .map((item) => item.date || item.issue_date || item.start_date)
-        .slice(0, 3);
-
-      // Trouver des noms éventuels
-      const names = data
-        .filter((item) => item.name || item.client_name || item.project_name)
-        .map((item) => item.name || item.client_name || item.project_name)
-        .slice(0, 3);
-
-      // Trouver des montants éventuels
-      const amounts = data
-        .filter(
-          (item) =>
-            item.total || item.total_ttc || item.amount || item.total_ht,
-        )
-        .map(
-          (item) =>
-            item.total || item.total_ttc || item.amount || item.total_ht,
-        )
-        .slice(0, 3);
-
-      let response = `J'ai trouvé ${data.length} information(s) concernant votre demande`;
-
-      if (description) {
-        const shortDesc =
-          description.length > 100
-            ? description.substring(0, 97) + '...'
-            : description;
-        response += ` sur ${shortDesc.toLowerCase()}`;
-      }
-
-      response += '.\n\n';
-
-      if (data.length <= 5) {
-        // Pour un petit nombre de résultats, les lister tous
-        data.forEach((item, index) => {
-          response += `Information ${index + 1}:\n`;
-
-          // Limiter à 5 propriétés par item
-          const props = Object.entries(item).slice(0, 5);
-          props.forEach(([key, value]) => {
-            if (value !== null && value !== undefined) {
-              response += `- ${key.replace(/_/g, ' ')}: ${value}\n`;
-            }
-          });
-
-          response += '\n';
-        });
-      } else {
-        // Pour un grand nombre de résultats, donner un aperçu
-        response += `Voici un aperçu des résultats :\n\n`;
-
-        if (dates.length > 0) {
-          response += `Dates: ${dates.join(', ')}\n`;
-        }
-
-        if (names.length > 0) {
-          response += `Noms: ${names.join(', ')}\n`;
-        }
-
-        if (amounts.length > 0) {
-          response += `Montants: ${amounts.join(', ')}\n`;
-        }
-      }
-
-      return response;
-    } catch (error) {
-      // En cas d'erreur dans la génération de la réponse de secours, retourner quelque chose de très basique
-      return `J'ai trouvé ${data.length} résultat(s) concernant "${question}".`;
-    }
   }
 }
