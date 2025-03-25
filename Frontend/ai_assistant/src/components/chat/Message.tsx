@@ -9,17 +9,41 @@ interface MessageProps {
         data: ResponseData[] | ResponseData;
         type: 'list' | 'detail';
         humanResponse?: string;
+        textResponse?: string;
         success?: boolean;
         count?: number;
         sql?: string;
         description?: string;
+        selectedQuery?: {
+            question: string;
+            sql: string;
+            description: string;
+        };
+        alternativeQuestions?: string[];
     };
 }
 
 function Message({ response }: MessageProps) {
-    // Gestion du cas où humanResponse est undefined
-    const cleanResponse = response.humanResponse 
-        ? response.humanResponse
+    console.log("Message component - response:", response);
+    
+    // Récupérer le texte de réponse brut
+    const rawResponse = response.textResponse || response.humanResponse || response.description || '';
+    
+    // Fonction pour nettoyer la réponse
+    const cleanTextResponse = (text: string): string => {
+        return text
+            // Supprimer les parties de réflexion en anglais et les instructions
+            .replace(/\[Réponse\]/g, '')
+            .replace(/\[Non.*instructions\.\]/g, '')
+            .replace(/Okay, let's see.*one\./gs, '')
+            .replace(/First, I need to.*individually\./gs, '')
+            .replace(/<\/think>/g, '')
+            .replace(/<think>.*<\/think>/gs, '')
+            .replace(/\[.*?\]/g, '')
+            .replace(/^.*?\bthink\b.*?$/gm, '')
+            .replace(/^\s*Utilisateur:.*$/gm, '')
+            .replace(/^\s*Assistant:.*$/gm, '')
+            // Nettoyage des parties spécifiques au prompt
             .replace(/^Tu es un assistant.*?français\./s, '')
             .replace(/^Voici les informations.*?naturelle\./s, '')
             .replace(/^Question :.*?naturelle\./s, '')
@@ -28,8 +52,11 @@ function Message({ response }: MessageProps) {
             .replace(/^IMPORTANT :.*?naturelle\./s, '')
             .replace(/^Instructions :.*?naturelle\./s, '')
             .replace(/^Réponse :.*?naturelle\./s, '')
-            .trim()
-        : response.description || '';
+            .trim();
+    };
+
+    // Nettoyer la réponse
+    const cleanResponse = cleanTextResponse(rawResponse);
 
     // Fonction pour formater le contenu en fonction du type
     const renderContent = () => {
@@ -86,9 +113,56 @@ function Message({ response }: MessageProps) {
         }
     };
 
+    // Formater les dates dans les données pour un meilleur affichage
+    const formatData = () => {
+        if (!response.data || !Array.isArray(response.data)) return null;
+        
+        return (
+            <div className="mt-4">
+                <div className="space-y-3">
+                    {response.data.map((item, index) => (
+                        <div key={index} className="bg-gray-50 p-3 rounded border">
+                            {Object.entries(item).map(([key, value]) => {
+                                // Formater les dates si la valeur ressemble à une date ISO
+                                let displayValue = value;
+                                if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(value)) {
+                                    try {
+                                        displayValue = new Date(value).toLocaleDateString('fr-FR', {
+                                            year: 'numeric',
+                                            month: 'long',
+                                            day: 'numeric'
+                                        });
+                                    } catch (e) {
+                                        // En cas d'erreur, garder la valeur originale
+                                    }
+                                }
+                                
+                                // Formater les pourcentages
+                                if (key.includes('percentage') && typeof value === 'number') {
+                                    displayValue = `${Math.round(value * 100) / 100}%`;
+                                }
+                                
+                                return (
+                                    <div key={key} className="mb-1">
+                                        <span className="font-medium">{key.replace(/_/g, ' ')}: </span>
+                                        <span>{typeof displayValue === 'object' 
+                                            ? JSON.stringify(displayValue) 
+                                            : String(displayValue)}
+                                        </span>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    ))}
+                </div>
+            </div>
+        );
+    };
+
     return (
         <div className="bg-white p-4 w-full rounded-lg shadow-md">
             {renderContent()}
+            {Array.isArray(response.data) && response.data.length > 0 && formatData()}
         </div>
     )
 }

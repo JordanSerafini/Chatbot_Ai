@@ -9,10 +9,17 @@ interface ChatResponse {
     data: ResponseData[] | ResponseData;
     type: 'list' | 'detail';
     humanResponse?: string;
+    textResponse?: string;
     success?: boolean;
     count?: number;
     sql?: string;
     description?: string;
+    selectedQuery?: {
+        question: string;
+        sql: string;
+        description: string;
+    };
+    alternativeQuestions?: string[];
 }
 
 interface InputProps {
