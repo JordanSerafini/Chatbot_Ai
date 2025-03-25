@@ -604,6 +604,11 @@ export class ModelService {
       }
     }
 
+    // Bonus supplémentaire si un type de document a été trouvé
+    if (hasDocumentTypeMatch) {
+      score += 10;  // Bonus pour avoir trouvé un type de document valide
+    }
+
     // Bonus pour les correspondances exactes de mots-clés
     keywords.forEach((keyword) => {
       if (normalizedText.includes(keyword.toLowerCase())) {
