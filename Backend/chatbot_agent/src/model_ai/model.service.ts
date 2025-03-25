@@ -696,12 +696,12 @@ Ta réponse DOIT commencer directement par le fait principal, sans phrase d'intr
 
     // Enlever d'abord les guillemets qui entourent toute la réponse
     let cleaned = response.replace(/^"(.*)"$/s, '$1');
-    
+
     // Supprimer les doublons de phrases - étape 1: normaliser
     const sentences = cleaned.split(/[.!?]\s+/).filter((s) => s.length > 0);
     const uniqueSentences = [...new Set(sentences)];
     cleaned = uniqueSentences.join('. ') + (cleaned.endsWith('.') ? '' : '.');
-    
+
     // Liste des patterns à supprimer
     const patternsToRemove = [
       // Métadiscours et réflexions
