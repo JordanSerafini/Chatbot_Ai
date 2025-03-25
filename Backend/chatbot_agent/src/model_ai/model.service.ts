@@ -13,14 +13,19 @@ interface RagQuestion {
 }
 
 interface RagResponse {
-  querySelected: string;
-  descriptionQuerySelected?: string;
-  questionSelected?: string;
-  otherQuery: string[];
-  otherQuestions?: {
-    question: string;
-    description: string;
+  querySelected: {
     sql: string;
+    description: string;
+    question: string;
+    distance: number;
+    parameters?: any[];
+  };
+  otherQueries: {
+    sql: string;
+    description: string;
+    question: string;
+    distance: number;
+    parameters?: any[];
   }[];
 }
 
@@ -69,47 +74,61 @@ export class ModelService {
 
   async generateResponse(question: string): Promise<RagResponse> {
     this.logger.log(`Starting generateResponse with question: ${question}`);
-
     try {
       // 1. Get similar questions from RAG
       const similarQuestions = await this.getSimilarQuestions(question);
       this.logger.log(`Found ${similarQuestions.length} similar questions`);
 
       if (similarQuestions.length === 0) {
-        return { querySelected: '', otherQuery: [] };
+        return {
+          querySelected: {
+            sql: '',
+            description: '',
+            question: '',
+            distance: 0,
+          },
+          otherQueries: [],
+        };
       }
 
       // 2. Select best match using LM Studio
       const bestMatch = await this.selectBestMatch(question, similarQuestions);
       this.logger.log(`Selected best match: ${bestMatch.question}`);
 
-      // 3. Prepare other options
-      const otherQueries = similarQuestions
-        .filter((q) => q.question !== bestMatch.question)
-        .slice(0, 2)
-        .map((q) => q.metadata.sql);
-
-      // Préparer les informations détaillées pour les autres requêtes
-      const otherQuestionsDetails = similarQuestions
+      // 3. Prepare other options avec toutes les informations
+      const otherQueriesDetails = similarQuestions
         .filter((q) => q.question !== bestMatch.question)
         .slice(0, 2)
         .map((q) => ({
-          question: q.question,
-          description: q.metadata.description,
           sql: q.metadata.sql,
+          description: q.metadata.description,
+          question: q.question,
+          distance: q.distance,
+          parameters: q.metadata.parameters || [],
         }));
 
-      // 4. Return response complète
+      // 4. Return response avec structure complète
       return {
-        querySelected: bestMatch.metadata.sql,
-        descriptionQuerySelected: bestMatch.metadata.description,
-        questionSelected: bestMatch.question,
-        otherQuery: otherQueries, // Pour compatibilité
-        otherQuestions: otherQuestionsDetails,
+        querySelected: {
+          sql: bestMatch.metadata.sql,
+          description: bestMatch.metadata.description,
+          question: bestMatch.question,
+          distance: bestMatch.distance,
+          parameters: bestMatch.metadata.parameters || [],
+        },
+        otherQueries: otherQueriesDetails,
       };
     } catch (error) {
       this.logger.error(`Error in generateResponse: ${error.message}`);
-      return { querySelected: '', otherQuery: [] };
+      return {
+        querySelected: {
+          sql: '',
+          description: '',
+          question: '',
+          distance: 0,
+        },
+        otherQueries: [],
+      };
     }
   }
 
@@ -210,16 +229,20 @@ export class ModelService {
   ): string {
     let optionsText = '';
     options.forEach((option, index) => {
-      optionsText += `${index + 1}) "${option.question}" (score: ${(1 - option.distance).toFixed(2)})\n`;
+      optionsText += `${index + 1}) "${option.question}" (score de similarité: ${(1 - option.distance).toFixed(2)})\n`;
     });
+    
+    return `Tu es un assistant SQL spécialisé qui aide à sélectionner la question la plus pertinente par rapport à la requête de l'utilisateur.
 
-    return `Tu es un assistant intelligent qui aide à trouver la question la plus pertinente.
+Question de l'utilisateur: "${question}"
 
-Question utilisateur: "${question}"
-
-Options disponibles:
+Voici les questions similaires disponibles (avec leur score de similarité calculé par distance vectorielle):
 ${optionsText}
 
-Indique uniquement le numéro de l'option la plus pertinente (1-${options.length}).`;
+Ta tâche:
+1. Analyse attentivement la question de l'utilisateur
+2. Compare-la avec chaque option proposée
+3. Sélectionne l'option qui correspond le mieux à l'intention et au besoin de l'utilisateur
+`;
   }
 }

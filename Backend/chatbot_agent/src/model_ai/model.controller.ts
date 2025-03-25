@@ -2,8 +2,20 @@ import { Body, Controller, Post, Logger } from '@nestjs/common';
 import { ModelService } from './model.service';
 
 interface RagResponse {
-  querySelected: string;
-  otherQuery: string[];
+  querySelected: {
+    sql: string;
+    description: string;
+    question: string;
+    distance: number;
+    parameters?: any[];
+  };
+  otherQueries: {
+    sql: string;
+    description: string;
+    question: string;
+    distance: number;
+    parameters?: any[];
+  }[];
 }
 
 interface QueryDto {
@@ -24,7 +36,12 @@ export class ModelController {
       queryDto.question,
     );
 
-    this.logger.log(`Generated response: ${JSON.stringify(response)}`);
+    this.logger.log(
+      `Generated response: ${JSON.stringify({
+        selectedQuestion: response.querySelected.question,
+        otherQueriesCount: response.otherQueries.length,
+      })}`,
+    );
 
     return response;
   }
