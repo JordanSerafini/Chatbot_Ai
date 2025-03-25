@@ -20,16 +20,16 @@ interface RagResponse {
   querySelected: {
     sql: string;
     description: string;
-    question: string;
+  question: string;
     distance: number;
     parameters?: any[];
   };
   otherQueries: {
-    sql: string;
-    description: string;
+  sql: string;
+  description: string;
     question: string;
-    distance: number;
-    parameters?: any[];
+  distance: number;
+  parameters?: any[];
   }[];
 }
 
@@ -64,14 +64,51 @@ export class ModelService {
   }
 
   private async checkLmStudioAvailability(): Promise<void> {
-    try {
-      const lmStudioUrl = this.getLmStudioUrl();
-      await axios.get(`${lmStudioUrl}/models`);
-      this.logger.log('Successfully connected to LM Studio API');
-    } catch (error) {
-      this.logger.error(`Failed to connect to LM Studio API: ${error.message}`);
+    const lmStudioUrl = this.getLmStudioUrl();
+    this.logger.log(`Checking LM Studio availability at ${lmStudioUrl}/models`);
+    
+    // Liste des URLs à essayer en cas d'échec
+    const fallbackUrls = [
+      lmStudioUrl, 
+      'http://host.docker.internal:1234/v1',
+      'http://172.17.0.1:1234/v1',
+      'http://localhost:1234/v1',
+      'http://127.0.0.1:1234/v1'
+    ];
+    
+    // Dédupliquer les URLs
+    const uniqueUrls = [...new Set(fallbackUrls)];
+    
+    // Essayer chaque URL
+    let lastError: any = null;
+    for (const url of uniqueUrls) {
+      try {
+        this.logger.log(`Trying to connect to LM Studio at ${url}/models`);
+        await axios.get(`${url}/models`, { timeout: 5000 });
+        this.logger.log(`Successfully connected to LM Studio API at ${url}`);
+        
+        // Si la connexion réussit avec une URL différente, mettre à jour l'URL dans l'environnement
+        if (url !== lmStudioUrl) {
+          this.logger.log(`Updating LM Studio URL from ${lmStudioUrl} to ${url}`);
+          this.configService.set('LM_STUDIO_URL', url);
+        }
+        
+        return; // Sortir de la fonction si une connexion réussit
+      } catch (error) {
+        this.logger.warn(`Failed to connect to LM Studio API at ${url}: ${error.message}`);
+        lastError = error;
+      }
+    }
+    
+    // Si toutes les tentatives échouent, journaliser l'erreur
+    if (lastError) {
+      this.logger.error(`Failed to connect to LM Studio API: ${lastError.message}`);
+      this.logger.error(`Error details: ${JSON.stringify(lastError.code || 'No error code')}`);
       this.logger.error(
-        'Make sure LM Studio is running with API server enabled',
+        'Make sure LM Studio is running with API server enabled on http://localhost:1234',
+      );
+      this.logger.error(
+        'From Docker, we are trying to access it via multiple methods including host.docker.internal',
       );
     }
   }
@@ -666,206 +703,17 @@ export class ModelService {
     options: RagQuestion[],
   ): RagQuestion {
     try {
-      this.logger.log(`Comparaison directe avec question: "${question}"`);
-
-      const normalizedUserQuestion = question
-        .toLowerCase()
-        .normalize('NFD')
-        .replace(/[\u0300-\u036f]/g, '');
-
-      this.logger.log(`Question normalisée: "${normalizedUserQuestion}"`);
-
-      // Vérification directe pour les requêtes spécifiques
-      if (
-        normalizedUserQuestion.includes('devis') &&
-        (normalizedUserQuestion.includes('refuse') ||
-          normalizedUserQuestion.includes('rejete'))
-      ) {
-        const refusedQuotationQuery = options.find((option) => {
-          const normalizedOption = option.question.toLowerCase();
-          return (
-            normalizedOption.includes('devis') &&
-            (normalizedOption.includes('refus') ||
-              normalizedOption.includes('rejet'))
-          );
-        });
-
-        if (refusedQuotationQuery) {
-          this.logger.log(
-            `Correspondance directe trouvée pour devis refusés: ${refusedQuotationQuery.question}`,
-          );
-          return refusedQuotationQuery;
-        }
-      }
-
-      const potentialParams = this.extractPotentialParameters(
-        normalizedUserQuestion,
-      );
-      this.logger.log(
-        `Paramètres potentiels détectés: ${JSON.stringify(potentialParams)}`,
-      );
-
-      const keywords = this.extractSignificantKeywords(normalizedUserQuestion);
-      this.logger.log(`Mots-clés extraits: ${keywords.join(', ')}`);
-
-      // Vérifier si la question contient un ID de chantier
-      const projectIdMatch = normalizedUserQuestion.match(
-        /[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}/i,
-      );
-      const hasProjectId = !!projectIdMatch;
-
-      // Vérifier si la question demande des détails
-      const isDetailsRequest =
-        normalizedUserQuestion.includes('details') ||
-        normalizedUserQuestion.includes('détails') ||
-        normalizedUserQuestion.includes('info');
-
-      // Vérifier le type de document demandé
-      const isQuotationQuestion = normalizedUserQuestion.includes('devis');
-      const isInvoiceQuestion = normalizedUserQuestion.includes('facture');
-
-      // Vérifier si un statut est mentionné
-      const hasStatus = normalizedUserQuestion.match(
-        /\b(brouillon|envoy[ée]e?|pay[ée]e?|en[_\s]retard|annul[ée]e?|refus[ée]e?|rejet[ée]e?|valid[ée]e?|accept[ée]e?)\b/i,
-      );
-
-      const scoredOptions = options.map((option) => {
-        const normalizedOptionQuestion = option.question
-          .toLowerCase()
-          .normalize('NFD')
-          .replace(/[\u0300-\u036f]/g, '');
-
-        // Score basé sur les paramètres
-        const parameterScore = this.calculateParameterMatchScore(
-          option.metadata.parameters || [],
-          potentialParams,
-        );
-
-        // Score basé sur les mots-clés
-        const keywordScore = this.calculateKeywordMatchScore(
-          keywords,
-          normalizedOptionQuestion,
-        );
-
-        // Vérifier si l'option a les mêmes types de paramètres que ceux détectés
-        const hasMatchingParamTypes = potentialParams.some((param) => {
-          const paramType = param.split(':')[0];
-          return option.metadata.parameters?.some((p) =>
-            p.name.includes(paramType),
-          );
-        });
-
-        // Bonus pour les correspondances de paramètres
-        const parameterBonus = hasMatchingParamTypes ? 50 : 0;
-
-        // Bonus spécial pour les combinaisons de mots-clés importantes
-        let combinationBonus = 0;
-        if (
-          normalizedUserQuestion.includes('devis') &&
-          normalizedOptionQuestion.includes('devis')
-        ) {
-          combinationBonus += 50;
-        }
-        if (
-          normalizedUserQuestion.includes('refuse') &&
-          normalizedOptionQuestion.includes('refuse')
-        ) {
-          combinationBonus += 60;
-        }
-        if (
-          normalizedUserQuestion.includes('recent') &&
-          normalizedOptionQuestion.includes('recent')
-        ) {
-          combinationBonus += 30;
-        }
-
-        // Bonus pour les détails de chantier
-        let detailsBonus = 0;
-        if (hasProjectId && normalizedOptionQuestion.includes('[project]')) {
-          detailsBonus += 100; // Bonus très important pour les requêtes avec ID de chantier
-        }
-        if (
-          isDetailsRequest &&
-          normalizedOptionQuestion.includes('informations')
-        ) {
-          detailsBonus += 50; // Bonus pour les requêtes de détails
-        }
-
-        // Pénalité pour les mauvaises correspondances de type de document
-        let documentTypePenalty = 0;
-        if (
-          isQuotationQuestion &&
-          normalizedOptionQuestion.includes('facture')
-        ) {
-          documentTypePenalty += 100;
-        }
-        if (isInvoiceQuestion && normalizedOptionQuestion.includes('devis')) {
-          documentTypePenalty += 100;
-        }
-
-        // Pénalité pour les mauvaises correspondances de statut
-        let statusPenalty = 0;
-        if (hasStatus && !hasMatchingParamTypes) {
-          statusPenalty += 80;
-        }
-
-        // Pénalité pour les options qui ne correspondent pas au contexte
-        let contextPenalty = 0;
-        if (hasProjectId && !normalizedOptionQuestion.includes('[project]')) {
-          contextPenalty += 150; // Pénalité forte pour ignorer un ID de chantier
-        }
-        if (
-          isDetailsRequest &&
-          !normalizedOptionQuestion.includes('informations')
-        ) {
-          contextPenalty += 50; // Pénalité pour ignorer une demande de détails
-        }
-
-        // Pénalité de distance réduite et plafonnée
-        const distancePenalty = Math.min(option.distance * 2, 10);
-
-        // Score final avec plus de poids sur les correspondances de mots-clés et les combinaisons
-        const totalScore =
-          keywordScore * 5 +
-          parameterScore * 4 +
-          parameterBonus +
-          combinationBonus +
-          detailsBonus -
-          documentTypePenalty -
-          statusPenalty -
-          contextPenalty -
-          distancePenalty;
-
-        this.logger.log(
-          `Option "${option.question}" - Score: ${totalScore.toFixed(2)} (keywords: ${keywordScore}, params: ${parameterScore}, bonus: ${parameterBonus}, combination: ${combinationBonus}, details: ${detailsBonus}, docPenalty: ${documentTypePenalty}, statusPenalty: ${statusPenalty}, contextPenalty: ${contextPenalty}, distance: ${distancePenalty})`,
-        );
-
-        return {
-          option,
-          score: totalScore,
-        };
-      });
-
-      // Filtrer les options avec un score minimum
-      const validOptions = scoredOptions.filter((option) => option.score > 0);
-
-      if (validOptions.length === 0) {
-        this.logger.warn(
-          "Aucune option n'a obtenu un score positif, retour à la distance minimale",
-        );
-        return options.reduce(
-          (min, current) => (current.distance < min.distance ? current : min),
-          options[0],
-        );
-      }
-
-      validOptions.sort((a, b) => b.score - a.score);
-      const bestOption = validOptions[0].option;
-      this.logger.log(
-        `Meilleure option sélectionnée: "${bestOption.question}"`,
-      );
-
-      return bestOption;
+      this.logger.log(`Sélection directe avec distance pour la question: "${question}"`);
+      
+      // Trier les options par distance (la plus petite distance en premier)
+      const sortedOptions = [...options].sort((a, b) => a.distance - b.distance);
+      
+      // Prendre l'option avec la plus petite distance
+      const bestMatch = sortedOptions[0];
+      
+      this.logger.log(`Option sélectionnée par distance: "${bestMatch.question}" (distance: ${bestMatch.distance})`);
+      
+      return bestMatch;
     } catch (error) {
       this.logger.error(`Erreur lors de la sélection: ${error.message}`);
       return options[0];
@@ -1289,5 +1137,58 @@ Ta réponse DOIT commencer directement par le fait principal, sans phrase d'intr
     }
 
     return cleaned.trim();
+  }
+
+  async testLmStudioConnection(): Promise<{ 
+    success: boolean; 
+    message: string; 
+    models?: any;
+    error?: any;
+  }> {
+    try {
+      const lmStudioUrl = this.getLmStudioUrl();
+      this.logger.log(`Testing LM Studio connection at ${lmStudioUrl}/models`);
+      const response = await axios.get(`${lmStudioUrl}/models`, { timeout: 5000 });
+      this.logger.log('Successfully connected to LM Studio API');
+      return { 
+        success: true, 
+        message: `Connected to LM Studio at ${lmStudioUrl}`,
+        models: response.data
+      };
+    } catch (error) {
+      this.logger.error(`Failed to connect to LM Studio API: ${error.message}`);
+      this.logger.error(`Error details: ${JSON.stringify(error.code || 'No error code')}`);
+      return {
+        success: false,
+        message: `Failed to connect to LM Studio: ${error.message}`,
+        error: error.code
+      };
+    }
+  }
+
+  async testRagConnection(): Promise<{ 
+    success: boolean; 
+    message: string;
+    health?: any;
+    error?: any;
+  }> {
+    try {
+      const ragUrl = this.getRagUrl();
+      this.logger.log(`Testing RAG connection at ${ragUrl}/health`);
+      const response = await axios.get(`${ragUrl}/health`, { timeout: 5000 });
+      this.logger.log('Successfully connected to RAG service');
+      return { 
+        success: true, 
+        message: `Connected to RAG service at ${ragUrl}`,
+        health: response.data
+      };
+    } catch (error) {
+      this.logger.error(`Failed to connect to RAG service: ${error.message}`);
+      return {
+        success: false,
+        message: `Failed to connect to RAG service: ${error.message}`,
+        error: error.code
+      };
+    }
   }
 }

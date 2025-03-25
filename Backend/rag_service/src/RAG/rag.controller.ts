@@ -13,6 +13,7 @@ import { RagService } from './rag.service';
 import { SqlQueriesService } from '../sql-queries/sql-queries.service';
 import { ChromaService } from '../services/chroma.service';
 import { SimilarQuestion } from '../interfaces/question.interface';
+import { Logger } from '@nestjs/common';
 
 class QuestionDto {
   question: string;
@@ -21,6 +22,8 @@ class QuestionDto {
 
 @Controller('rag')
 export class RagController {
+  private readonly logger = new Logger(RagController.name);
+
   constructor(
     private readonly ragService: RagService,
     private readonly sqlQueriesService: SqlQueriesService,
@@ -87,7 +90,45 @@ export class RagController {
         throw new BadRequestException('La question est requise');
       }
 
-      // Utiliser la nouvelle méthode processQuestion qui intègre la recherche de questions similaires
+      this.logger.log(`Traitement de la question: "${question}"`);
+
+      // Analyser la question pour détecter des patterns spécifiques
+      const lowerQuestion = question.toLowerCase().trim();
+      
+      // Détection pour les questions sur les chantiers de cette année
+      if (/chantier.*(?:cette année|année en cours|cette anné|annee|cet an)/i.test(lowerQuestion) ||
+          /(?:cette année|année en cours|cette anné|annee|cet an).*chantier/i.test(lowerQuestion) ||
+          /(?:projet|projets).*(?:cette année|année en cours|cette anné|annee|cet an)/i.test(lowerQuestion) ||
+          /(?:cette année|année en cours|cette anné|annee|cet an).*(?:projet|projets)/i.test(lowerQuestion)) {
+        
+        this.logger.log(`Question détectée comme demande de chantiers pour cette année`);
+        
+        // Forcer l'utilisation de la requête "projects_this_year"
+        const sqlMetadata = await this.sqlQueriesService.getQueryMetadataById('projects_this_year');
+        
+        if (sqlMetadata) {
+          return {
+            question,
+            finalQuery: sqlMetadata.sql,
+            originalQuery: sqlMetadata.sql,
+            fromStoredQuery: true,
+            storedQueryId: 'projects_this_year',
+            similarity: 0.95,
+            source: 'rag',
+            confidence: 0.95,
+            parameters: [],
+            description: sqlMetadata.description,
+            bestMatch: {
+              queryId: 'projects_this_year',
+              sql: sqlMetadata.sql,
+              description: sqlMetadata.description,
+              similarity: 0.95
+            }
+          };
+        }
+      }
+
+      // Utiliser la méthode processQuestion qui intègre la recherche de questions similaires
       const result = await this.ragService.processQuestion(question);
 
       return result;

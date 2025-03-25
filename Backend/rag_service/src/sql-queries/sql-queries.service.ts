@@ -354,4 +354,64 @@ export class SqlQueriesService {
       throw error;
     }
   }
+
+  /**
+   * Récupère les métadonnées d'une requête SQL par son ID
+   * @param queryId Identifiant de la requête
+   * @returns Les métadonnées de la requête (sql, description, paramètres)
+   */
+  async getQueryMetadataById(queryId: string): Promise<QueryMetadata | null> {
+    try {
+      this.logger.log(`Recherche de la requête avec l'ID: ${queryId}`);
+      
+      // Parcourir les fichiers de requêtes pour trouver celle avec l'ID spécifié
+      const queryDir = path.join(process.cwd(), 'query');
+      const queryFiles = [
+        'clients.query.json',
+        'invoices.query.json',
+        'planning.query.json',
+        'projects.query.json',
+        'quotations.query.json',
+      ];
+      
+      for (const file of queryFiles) {
+        try {
+          const filePath = path.join(queryDir, file);
+          const data = await this.loadQueryFile(filePath);
+          
+          // Chercher la requête avec l'ID correspondant
+          const query = data.queries.find(q => q.id === queryId);
+          
+          if (query) {
+            this.logger.log(`Requête trouvée dans le fichier ${file}`);
+            return {
+              sql: query.sql,
+              description: query.description,
+              parameters: JSON.stringify(query.parameters || []),
+            };
+          }
+        } catch (err) {
+          this.logger.error(`Erreur lors de la lecture du fichier ${file}:`, err);
+        }
+      }
+      
+      // Si la requête n'est pas trouvée dans les fichiers, rechercher dans ChromaDB
+      const result = await this.hashCollection.get({
+        where: { query_id: queryId },
+        limit: 1,
+      });
+      
+      if (result.ids && result.ids.length > 0 && result.metadatas && result.metadatas.length > 0) {
+        const metadata = result.metadatas[0] as QueryMetadata;
+        this.logger.log(`Requête trouvée dans ChromaDB`);
+        return metadata;
+      }
+      
+      this.logger.warn(`Aucune requête trouvée avec l'ID: ${queryId}`);
+      return null;
+    } catch (error) {
+      this.logger.error(`Erreur lors de la récupération de la requête: ${error.message}`);
+      return null;
+    }
+  }
 }

@@ -60,8 +60,6 @@ services:
     networks:
       - app-network
     environment:
-      - CHROMA_OPEN_TELEMETRY__ENDPOINT=http://otel-collector:4317/
-      - CHROMA_OPEN_TELEMETRY__SERVICE_NAME=chroma
       - CHROMA_SERVER_CORS_ALLOW_ORIGINS=["*"]
       - CHROMA_PERSIST_DIRECTORY=/chroma/chroma
     depends_on:
@@ -79,14 +77,14 @@ services:
       - /app/node_modules
     ports:
       - "3002:3002"
+    networks:
+      - app-network
     environment:
       - NODE_ENV=development
+      - PORT=3002
       - CHROMA_URL=http://ChromaDB:8000
     depends_on:
       - ChromaDB
-    networks:
-      - app-network
-    command: npm run start:dev
 
   chatbot_agent:
     container_name: chatbot_agent
@@ -103,28 +101,10 @@ services:
     environment:
       - NODE_ENV=development
       - PORT=3001
-      - LM_STUDIO_URL=https://7642-2a01-cb15-4c5-c200-ff2e-b498-e114-f0c2.ngrok-free.app/v1
+      - LM_STUDIO_URL=https://f201-2a01-cb15-4c5-c200-ff2e-b498-e114-f0c2.ngrok-free.app/v1
       - RAG_SERVICE_URL=http://rag_service:3002
     depends_on:
       - rag_service
-
-  # lmstudio:
-  #   build:
-  #     context: ./Backend/lmstudio
-  #     dockerfile: Dockerfile
-  #   ports:
-  #     - "1234:1234"
-  #   volumes:
-  #     - ./models:/app/models
-  #   deploy:
-  #     resources:
-  #       reservations:
-  #         devices:
-  #           - driver: nvidia
-  #             count: 1
-  #             capabilities: [gpu]
-  #   networks:
-  #     - app-network
 
 networks:
   app-network:

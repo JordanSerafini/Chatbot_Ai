@@ -553,7 +553,7 @@ export class RagService {
       // Recherche des questions similaires
       const result = await collection.query({
         queryTexts: [cleanInput],
-        nResults: 5,
+        nResults: 10,
       });
 
       if (!result.ids || result.ids.length === 0 || !result.ids[0].length) {
@@ -574,8 +574,8 @@ export class RagService {
           cleanInput,
           this.cleanText(q),
         );
-        // Combiner les scores avec un poids approprié
-        const combinedScore = 0.3 * (1 - vectorDistance) + 0.7 * textSimilarity;
+        // Combiner les scores avec un poids plus important sur la similarité textuelle
+        const combinedScore = 0.2 * (1 - vectorDistance) + 0.8 * textSimilarity;
 
         return {
           question: q,
@@ -588,10 +588,10 @@ export class RagService {
       // Trier par score de similarité
       candidates.sort((a, b) => b.similarity - a.similarity);
 
-      // Prendre la meilleure correspondance si elle dépasse le seuil
+      // Prendre la meilleure correspondance si elle dépasse le seuil (réduit à 0.4)
       const bestMatch = candidates[0];
 
-      if (bestMatch && bestMatch.similarity > 0.55) {
+      if (bestMatch && bestMatch.similarity > 0.4) {
         const queryId = bestMatch.id.split('-')[0];
 
         // Extraire les paramètres possibles de la requête
@@ -690,31 +690,89 @@ export class RagService {
 
     return text
       .toLowerCase()
+      // Normaliser les caractères accentués
+      .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+      // Supprimer la ponctuation
       .replace(/[.,/#!$%&*;:{}=\-_`~()]/g, '')
-      .replace(/\s{2,}/g, ' ') // Réduire les espaces multiples
+      // Réduire les espaces multiples
+      .replace(/\s{2,}/g, ' ')
+      // Supprimer les articles et mots communs qui n'aident pas à la comparaison sémantique
+      .replace(/\b(le|la|les|un|une|des|du|de|l'|d'|et|ou|a|à|au|aux|en|pour|par|sur|dans|avec|qui|que|quoi|dont|où|comment|quand|pourquoi|quel|quelle|quels|quelles|ce|cette|ces|mon|ma|mes|ton|ta|tes|son|sa|ses)\b/g, ' ')
       .trim();
   }
 
-  // Calculer la similarité entre deux textes (méthode simple basée sur les mots communs)
+  // Calculer la similarité entre deux textes (méthode améliorée basée sur les mots communs et importants)
   private calculateSimilarity(text1: string, text2: string): number {
-    if (!text1 || !text2) return 0;
+    // Nettoyer les textes
+    const cleanedText1 = this.cleanText(text1);
+    const cleanedText2 = this.cleanText(text2);
 
-    const words1 = new Set(text1.split(' ').filter((word) => word.length > 2));
-    const words2 = new Set(text2.split(' ').filter((word) => word.length > 2));
+    // Extraire les mots
+    const words1 = cleanedText1.split(/\s+/).filter(word => word.length > 1);
+    const words2 = cleanedText2.split(/\s+/).filter(word => word.length > 1);
 
-    if (words1.size === 0 || words2.size === 0) return 0;
+    if (words1.length === 0 || words2.length === 0) return 0;
 
-    // Compter les mots communs
-    let commonWords = 0;
+    // Mots-clés importants avec leur poids pour le domaine (chantiers, projets, etc.)
+    const keywordWeights = {
+      'chantier': 2,
+      'chantiers': 2,
+      'projet': 2,
+      'projets': 2,
+      'annee': 2,
+      'année': 2,
+      'cette': 1.5,
+      'actuel': 1.5,
+      'actuels': 1.5,
+      'en': 1,
+      'cours': 1,
+      'prevu': 1.5,
+      'prévus': 1.5,
+      'planifié': 1.5,
+      'planifiés': 1.5
+    };
+
+    // Calculer un score pondéré pour les mots communs
+    let matchScore = 0;
+    let totalWeight = 0;
+
+    // Pour chaque mot du premier texte
     for (const word of words1) {
-      if (words2.has(word)) {
-        commonWords++;
+      const baseWeight = keywordWeights[word] || 1;
+      totalWeight += baseWeight;
+
+      // Si le mot exact existe dans le deuxième texte
+      if (words2.includes(word)) {
+        matchScore += baseWeight;
+        continue;
+      }
+
+      // Recherche de mots similaires (distance de Levenshtein simplifiée)
+      const similarWord = words2.find(w2 => {
+        // Pour les mots courts, autoriser seulement 1 différence, pour les plus longs, 2
+        const maxDiff = word.length <= 5 ? 1 : 2;
+        // Différence de longueur trop importante
+        if (Math.abs(word.length - w2.length) > maxDiff) return false;
+        
+        // Compter les différences de caractères (algo simplifié)
+        let diffCount = 0;
+        for (let i = 0; i < Math.min(word.length, w2.length); i++) {
+          if (word[i] !== w2[i]) diffCount++;
+          if (diffCount > maxDiff) return false;
+        }
+        return true;
+      });
+
+      if (similarWord) {
+        matchScore += baseWeight * 0.8; // Score légèrement réduit pour les mots similaires
       }
     }
 
-    // Calculer le score de Jaccard (intersection/union)
-    const union = words1.size + words2.size - commonWords;
-    return commonWords / union;
+    // S'il n'y a pas de poids total, retourner 0
+    if (totalWeight === 0) return 0;
+
+    // Normaliser le score par rapport au poids total
+    return matchScore / totalWeight;
   }
 
   // Fonction utilitaire pour calculer la similarité cosinus
