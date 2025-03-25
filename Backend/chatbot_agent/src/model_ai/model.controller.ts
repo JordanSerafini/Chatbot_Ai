@@ -128,12 +128,15 @@ export class ModelController {
   }
 
   @Post('similarity-check')
-  async checkSimilarity(@Body() queryDto: QueryDto): Promise<SimilarityResponseDto> {
+  async checkSimilarity(
+    @Body() queryDto: QueryDto,
+  ): Promise<SimilarityResponseDto> {
     this.logger.log(`Checking similarity for question: ${queryDto.question}`);
 
     try {
       // Obtenir toutes les questions similaires du service RAG
-      const similarQuestions = await this.modelService.getSimilarQuestionsPublic(queryDto.question);
+      const similarQuestions =
+        await this.modelService.getSimilarQuestionsPublic(queryDto.question);
 
       // Si aucune question similaire, retourner directement "pas de similarité"
       if (!similarQuestions || similarQuestions.length === 0) {
@@ -141,10 +144,11 @@ export class ModelController {
       }
 
       // Demander au modèle de vérifier la similarité
-      const similarQuestion = await this.modelService.getSelectedQuestionOrSimilarity(
-        queryDto.question,
-        similarQuestions,
-      );
+      const similarQuestion =
+        await this.modelService.getSelectedQuestionOrSimilarity(
+          queryDto.question,
+          similarQuestions,
+        );
 
       return { result: similarQuestion };
     } catch (error) {

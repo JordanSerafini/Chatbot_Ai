@@ -342,11 +342,9 @@ Veuillez expliquer ce que fait cette requête SQL et comment elle répond à la 
     options: RagQuestion[],
   ): Promise<string> {
     const bestMatch = await this.selectBestMatch(userQuestion, options);
-    
     if (!bestMatch) {
       return 'pas de similarité';
     }
-    
     return bestMatch.question;
   }
 }
