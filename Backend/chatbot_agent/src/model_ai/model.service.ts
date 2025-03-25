@@ -409,128 +409,61 @@ export class ModelService {
     return keywords;
   }
 
-  private selectBestMatch(
-    question: string,
-    options: RagQuestion[],
-  ): RagQuestion {
-    try {
-      this.logger.log(`Comparaison directe avec question: "${question}"`);
-
-      // Normaliser la question de l'utilisateur
-      const normalizedUserQuestion = question
-        .toLowerCase()
-        .normalize('NFD')
-        .replace(/[\u0300-\u036f]/g, '');
-
-      this.logger.log(`Question normalisée: "${normalizedUserQuestion}"`);
-
-      // Extraire les paramètres potentiels de la question
-      const potentialParams = this.extractPotentialParameters(
-        normalizedUserQuestion,
-      );
-      this.logger.log(
-        `Paramètres potentiels détectés: ${JSON.stringify(potentialParams)}`,
-      );
-
-      // Filtrer les mots clés significatifs
-      const keywords = this.extractSignificantKeywords(normalizedUserQuestion);
-      this.logger.log(`Mots-clés extraits: ${keywords.join(', ')}`);
-
-      // Comparer avec chaque option
-      const scoredOptions = options.map((option) => {
-        // Normaliser la question de l'option
-        const normalizedOptionQuestion = option.question
-          .toLowerCase()
-          .normalize('NFD')
-          .replace(/[\u0300-\u036f]/g, '');
-
-        // Vérifier si l'option a des paramètres qui correspondent aux paramètres détectés
-        const parameterScore = this.calculateParameterMatchScore(
-          option.metadata.parameters || [],
-          potentialParams,
-        );
-
-        // Analyse de correspondance des mots-clés
-        const matchScore = this.calculateKeywordMatchScore(
-          keywords,
-          normalizedOptionQuestion,
-        );
-
-        // Bonus pour les requêtes avec paramètres si des paramètres sont détectés
-        const parameterBonus =
-          potentialParams.length > 0 && option.metadata.parameters ? 3 : 0;
-
-        // Score final combiné
-        const totalScore =
-          matchScore + parameterScore + parameterBonus - option.distance;
-
-        this.logger.log(
-          `Option "${option.question}" - Score: ${totalScore} (match: ${matchScore}, params: ${parameterScore}, bonus: ${parameterBonus}, distance: ${option.distance})`,
-        );
-
-        return {
-          option,
-          score: totalScore,
-        };
-      });
-
-      // Trier par score
-      scoredOptions.sort((a, b) => b.score - a.score);
-
-      // Prendre la meilleure option
-      const bestOption = scoredOptions[0].option;
-      this.logger.log(
-        `Meilleure option sélectionnée: "${bestOption.question}"`,
-      );
-
-      return bestOption;
-    } catch (error) {
-      this.logger.error(`Erreur lors de la sélection: ${error.message}`);
-      const sorted = [...options].sort((a, b) => a.distance - b.distance);
-      return sorted[0];
-    }
-  }
-
   private extractPotentialParameters(question: string): string[] {
     const params: string[] = [];
+    const normalizedQuestion = question
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '');
 
-    // Détecter les villes (après "à", "a", "de", "dans", ou en début de phrase)
-    const cityMatches = question.match(
-      /(?:^|\b(?:à|a|de|dans)\s+)([A-Za-zÀ-ÿ]+)/gi,
+    // Détecter les statuts avec plus de variations
+    const statusMatches = normalizedQuestion.match(
+      /\b(brouillon|envoy[ée]e?|pay[ée]e?|en[_\s]retard|annul[ée]e?|refus[ée]e?|rejet[ée]e?|valid[ée]e?|accept[ée]e?)\b/i,
     );
-    if (cityMatches) {
-      cityMatches.forEach((match) => {
-        const city = match.replace(/(?:^|\b(?:à|a|de|dans)\s+)/i, '');
-        params.push(city.trim());
-      });
+    if (statusMatches) {
+      const statusMap: { [key: string]: string } = {
+        brouillon: 'brouillon',
+        envoye: 'envoyée',
+        envoyee: 'envoyée',
+        paye: 'payée',
+        payee: 'payée',
+        refuse: 'refusée',
+        refusee: 'refusée',
+        rejete: 'rejetée',
+        rejetee: 'rejetée',
+        valide: 'validée',
+        validee: 'validée',
+        accepte: 'acceptée',
+        acceptee: 'acceptée',
+        annule: 'annulée',
+        annulee: 'annulée',
+      };
+
+      const status = statusMatches[1].toLowerCase();
+      const normalizedStatus = statusMap[status] || status;
+      params.push(`STATUS:${normalizedStatus}`);
     }
 
-    // Détecter les villes avec majuscule (potentiellement sans préposition)
-    const capitalizedWords = question.match(/\b[A-Z][a-zÀ-ÿ]+\b/g);
-    if (capitalizedWords) {
-      params.push(...capitalizedWords);
-    }
+    // Détecter les montants (garder le code existant)
+    const amountMatches = normalizedQuestion.match(
+      /(\d+([.,]\d{1,2})?)\s*(euros?|€)/gi,
+    );
+    if (amountMatches) {
+      const amounts = amountMatches
+        .map((match) =>
+          parseFloat(match.replace(/[^\d.,]/g, '').replace(',', '.')),
+        )
+        .sort((a, b) => a - b);
 
-    // Détecter les villes communes même sans majuscule
-    const commonCities = [
-      'paris',
-      'lyon',
-      'marseille',
-      'bordeaux',
-      'toulouse',
-      'nantes',
-      'lille',
-      'strasbourg',
-    ];
-    const words = question.toLowerCase().split(/\s+/);
-    words.forEach((word) => {
-      if (commonCities.includes(word)) {
-        params.push(word);
+      if (amounts.length >= 2) {
+        params.push(`MIN_AMOUNT:${amounts[0]}`);
+        params.push(`MAX_AMOUNT:${amounts[amounts.length - 1]}`);
+      } else if (amounts.length === 1) {
+        params.push(`AMOUNT:${amounts[0]}`);
       }
-    });
+    }
 
-    // Dédupliquer et nettoyer
-    return [...new Set(params.map((p) => p.toLowerCase()))];
+    return params;
   }
 
   private calculateParameterMatchScore(
@@ -546,17 +479,35 @@ export class ModelService {
 
     definedParams.forEach((param) => {
       const paramName = param.name.toLowerCase();
-      if (normalizedDetectedParams.some((dp) => dp.includes(paramName))) {
+
+      // Score spécial pour les villes
+      if (paramName === 'city' && normalizedDetectedParams.length > 0) {
+        // Vérifier si un des paramètres détectés est une ville commune
+        const commonCities = [
+          'paris',
+          'lyon',
+          'marseille',
+          'bordeaux',
+          'toulouse',
+          'nantes',
+          'lille',
+          'strasbourg',
+        ];
+        const hasCity = normalizedDetectedParams.some(
+          (param) => commonCities.includes(param) || /^[a-z]+$/.test(param), // Mot simple sans espaces ni caractères spéciaux
+        );
+
+        if (hasCity) {
+          score += 15; // Bonus très important pour les requêtes avec ville
+        }
+      }
+      // Autres types de paramètres
+      else if (normalizedDetectedParams.some((dp) => dp.includes(paramName))) {
         score += 2;
       }
 
+      // Bonus additionnels selon le type de paramètre
       switch (param.name) {
-        case 'CITY':
-          // Donner un bonus important si une ville est détectée
-          if (normalizedDetectedParams.length > 0) {
-            score += 10;
-          }
-          break;
         case 'CLIENT':
           if (normalizedDetectedParams.some((dp) => dp.includes('client'))) {
             score += 3;
@@ -597,37 +548,169 @@ export class ModelService {
     return score;
   }
 
-  // Calcule un score de correspondance basé sur les mots-clés
   private calculateKeywordMatchScore(keywords: string[], text: string): number {
     let score = 0;
+    const normalizedText = text.toLowerCase();
 
-    for (const keyword of keywords) {
-      if (text.includes(keyword)) {
-        // Donner plus de poids aux mots significatifs
-        if (
-          [
-            'total',
-            'cumul',
-            'cumulé',
-            'montant',
-            'somme',
-            'tva',
-            'ttc',
-            'ht',
-          ].includes(keyword)
-        ) {
-          score += 3;
-        } else if (
-          ['devis', 'facture', 'facturé', 'période'].includes(keyword)
-        ) {
-          score += 2;
-        } else {
-          score += 1;
+    // Types de documents avec leurs poids
+    const documentTypes = {
+      devis: { weight: 25, bonus: 15 }, // Augmenté et changé en bonus au lieu de pénalité
+      facture: { weight: 25, bonus: 15 },
+      projet: { weight: 20, bonus: 10 },
+      chantier: { weight: 20, bonus: 10 },
+    };
+
+    // Mots-clés critiques avec leurs poids
+    const criticalKeywords = {
+      client: 8,
+      montant: 6,
+      total: 6,
+      somme: 6,
+      euros: 5,
+      entre: 5,
+      recent: 10, // Augmenté pour les mots temporels
+      nouveau: 8,
+      dernier: 8,
+      refuse: 12, // Augmenté pour les statuts
+      rejete: 12,
+      valide: 12,
+      accepte: 12,
+    };
+
+    // Vérifier d'abord les types de documents
+    let hasDocumentTypeMatch = false;
+    for (const [docType, scores] of Object.entries(documentTypes)) {
+      const keywordPresent = keywords.some((k) => k.includes(docType));
+      const textContainsType = normalizedText.includes(docType);
+
+      if (keywordPresent && textContainsType) {
+        score += scores.weight;
+        hasDocumentTypeMatch = true;
+        // Bonus si le type est en début de phrase
+        if (normalizedText.startsWith(docType)) {
+          score += scores.bonus;
         }
       }
     }
 
-    return score;
+    // Vérifier les mots-clés critiques
+    for (const [keyword, weight] of Object.entries(criticalKeywords)) {
+      if (normalizedText.includes(keyword)) {
+        score += weight;
+        // Bonus pour les mots en début de phrase
+        if (normalizedText.startsWith(keyword)) {
+          score += Math.floor(weight / 2);
+        }
+      }
+    }
+
+    // Bonus pour les correspondances exactes de mots-clés
+    keywords.forEach((keyword) => {
+      if (normalizedText.includes(keyword.toLowerCase())) {
+        score += 5; // Bonus de base pour chaque mot-clé trouvé
+      }
+    });
+
+    return Math.max(0, score); // Empêcher les scores négatifs
+  }
+
+  private selectBestMatch(
+    question: string,
+    options: RagQuestion[],
+  ): RagQuestion {
+    try {
+      this.logger.log(`Comparaison directe avec question: "${question}"`);
+
+      const normalizedUserQuestion = question
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '');
+
+      this.logger.log(`Question normalisée: "${normalizedUserQuestion}"`);
+
+      const potentialParams = this.extractPotentialParameters(
+        normalizedUserQuestion,
+      );
+      this.logger.log(
+        `Paramètres potentiels détectés: ${JSON.stringify(potentialParams)}`,
+      );
+
+      const keywords = this.extractSignificantKeywords(normalizedUserQuestion);
+      this.logger.log(`Mots-clés extraits: ${keywords.join(', ')}`);
+
+      const scoredOptions = options.map((option) => {
+        const normalizedOptionQuestion = option.question
+          .toLowerCase()
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '');
+
+        // Score basé sur les paramètres
+        const parameterScore = this.calculateParameterMatchScore(
+          option.metadata.parameters || [],
+          potentialParams,
+        );
+
+        // Score basé sur les mots-clés
+        const keywordScore = this.calculateKeywordMatchScore(
+          keywords,
+          normalizedOptionQuestion,
+        );
+
+        // Vérifier si l'option a les mêmes types de paramètres que ceux détectés
+        const hasMatchingParamTypes = potentialParams.some((param) => {
+          const paramType = param.split(':')[0];
+          return option.metadata.parameters?.some((p) =>
+            p.name.includes(paramType),
+          );
+        });
+
+        // Bonus pour les correspondances de paramètres
+        const parameterBonus = hasMatchingParamTypes ? 25 : 0; // Augmenté à 25
+
+        // Pénalité de distance réduite et plafonnée
+        const distancePenalty = Math.min(option.distance * 2, 10); // Réduit à 2 avec plafond à 10
+
+        // Score final avec plus de poids sur les correspondances de mots-clés
+        const totalScore =
+          keywordScore * 3 +
+          parameterScore * 2 +
+          parameterBonus -
+          distancePenalty;
+
+        this.logger.log(
+          `Option "${option.question}" - Score: ${totalScore.toFixed(2)} (keywords: ${keywordScore}, params: ${parameterScore}, bonus: ${parameterBonus}, distance: ${distancePenalty})`,
+        );
+
+        return {
+          option,
+          score: totalScore,
+        };
+      });
+
+      // Filtrer les options avec un score minimum
+      const validOptions = scoredOptions.filter((option) => option.score > 0);
+
+      if (validOptions.length === 0) {
+        this.logger.warn(
+          "Aucune option n'a obtenu un score positif, retour à la distance minimale",
+        );
+        return options.reduce(
+          (min, current) => (current.distance < min.distance ? current : min),
+          options[0],
+        );
+      }
+
+      validOptions.sort((a, b) => b.score - a.score);
+      const bestOption = validOptions[0].option;
+      this.logger.log(
+        `Meilleure option sélectionnée: "${bestOption.question}"`,
+      );
+
+      return bestOption;
+    } catch (error) {
+      this.logger.error(`Erreur lors de la sélection: ${error.message}`);
+      return options[0];
+    }
   }
 
   // Vérifie si les deux textes contiennent les mêmes références temporelles
