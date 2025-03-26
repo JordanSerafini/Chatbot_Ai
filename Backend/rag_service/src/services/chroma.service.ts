@@ -2,6 +2,7 @@ import { Injectable, OnModuleInit, Logger } from '@nestjs/common';
 import { ChromaClient, Collection, GetCollectionParams } from 'chromadb';
 import { Question, SimilarQuestion } from '../interfaces/question.interface';
 import { ConfigService } from '@nestjs/config';
+import axios from 'axios';
 
 @Injectable()
 export class ChromaService implements OnModuleInit {
@@ -9,22 +10,31 @@ export class ChromaService implements OnModuleInit {
   private client: ChromaClient;
   private collection: Collection | undefined;
   private readonly COLLECTION_NAME = 'questions_collection';
+  private readonly embeddingServiceUrl: string;
+
   private readonly embeddingFunction = {
-    generate: (texts: string[]): Promise<number[][]> => {
-      return Promise.resolve(
-        texts.map(() =>
-          Array(1536)
-            .fill(0)
-            .map(() => Math.random() * 2 - 1),
-        ),
-      );
+    generate: async (texts: string[]): Promise<number[][]> => {
+      try {
+        const response = await axios.post(`${this.embeddingServiceUrl}/embed`, {
+          texts,
+        });
+        return response.data.embeddings;
+      } catch (error) {
+        this.logger.error('Erreur lors de la génération des embeddings:', error);
+        throw error;
+      }
     },
   };
 
   constructor(private configService: ConfigService) {
     const chromaUrl =
       this.configService.get<string>('CHROMA_URL') || 'http://ChromaDB:8000';
+    this.embeddingServiceUrl =
+      this.configService.get<string>('EMBEDDING_SERVICE_URL') || 'http://embedding-service:8001';
+    
     this.logger.log(`Connexion à ChromaDB sur : ${chromaUrl}`);
+    this.logger.log(`Service d'embeddings sur : ${this.embeddingServiceUrl}`);
+    
     this.client = new ChromaClient({
       path: chromaUrl,
     });

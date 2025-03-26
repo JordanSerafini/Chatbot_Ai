@@ -1,0 +1,57 @@
+@startuml Workflow_Email_Processing
+
+skinparam backgroundColor white
+skinparam defaultFontName "Helvetica"
+skinparam defaultFontSize 12
+skinparam roundCorner 10
+skinparam shadowing false
+
+skinparam ActivityBorderColor #2B5BE2
+skinparam ActivityBackgroundColor white
+skinparam ArrowColor #2B5BE2
+skinparam ActivityBorderThickness 1.5
+
+skinparam ActivityDiamondBackgroundColor white
+skinparam ActivityDiamondBorderColor #2B5BE2
+
+|Email Service|
+|AI Engine|
+|Actions|
+
+start
+
+|Email Service|
+:Récupération emails via API;
+
+|AI Engine|
+:Classification automatique des emails;
+
+fork
+  :Factures;
+  :Extraction données (PDF → CSV/XLSX);
+  |Actions|
+  :→ Notification comptable;
+  :→ Archivage automatique;
+fork again
+  :Clients;
+  :Analyse priorité & sentiment;
+  |Actions|
+  :→ Création ticket si urgent;
+  :→ Mise à jour CRM;
+fork again
+  :Fournisseurs;
+  :Détection problèmes/retards;
+  |Actions|
+  :→ Alerte responsable achats;
+end fork
+
+|AI Engine|
+:Génération rapport synthétique;
+
+|Actions|
+:Envoi résumé quotidien;
+:Création tâches automatiques;
+
+stop
+
+@enduml

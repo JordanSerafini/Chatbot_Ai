@@ -688,17 +688,23 @@ export class RagService {
   private cleanText(text: string): string {
     if (!text) return '';
 
-    return text
-      .toLowerCase()
-      // Normaliser les caractères accentués
-      .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
-      // Supprimer la ponctuation
-      .replace(/[.,/#!$%&*;:{}=\-_`~()]/g, '')
-      // Réduire les espaces multiples
-      .replace(/\s{2,}/g, ' ')
-      // Supprimer les articles et mots communs qui n'aident pas à la comparaison sémantique
-      .replace(/\b(le|la|les|un|une|des|du|de|l'|d'|et|ou|a|à|au|aux|en|pour|par|sur|dans|avec|qui|que|quoi|dont|où|comment|quand|pourquoi|quel|quelle|quels|quelles|ce|cette|ces|mon|ma|mes|ton|ta|tes|son|sa|ses)\b/g, ' ')
-      .trim();
+    return (
+      text
+        .toLowerCase()
+        // Normaliser les caractères accentués
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        // Supprimer la ponctuation
+        .replace(/[.,/#!$%&*;:{}=\-_`~()]/g, '')
+        // Réduire les espaces multiples
+        .replace(/\s{2,}/g, ' ')
+        // Supprimer les articles et mots communs qui n'aident pas à la comparaison sémantique
+        .replace(
+          /\b(le|la|les|un|une|des|du|de|l'|d'|et|ou|a|à|au|aux|en|pour|par|sur|dans|avec|qui|que|quoi|dont|où|comment|quand|pourquoi|quel|quelle|quels|quelles|ce|cette|ces|mon|ma|mes|ton|ta|tes|son|sa|ses)\b/g,
+          ' ',
+        )
+        .trim()
+    );
   }
 
   // Calculer la similarité entre deux textes (méthode améliorée basée sur les mots communs et importants)
@@ -708,28 +714,28 @@ export class RagService {
     const cleanedText2 = this.cleanText(text2);
 
     // Extraire les mots
-    const words1 = cleanedText1.split(/\s+/).filter(word => word.length > 1);
-    const words2 = cleanedText2.split(/\s+/).filter(word => word.length > 1);
+    const words1 = cleanedText1.split(/\s+/).filter((word) => word.length > 1);
+    const words2 = cleanedText2.split(/\s+/).filter((word) => word.length > 1);
 
     if (words1.length === 0 || words2.length === 0) return 0;
 
     // Mots-clés importants avec leur poids pour le domaine (chantiers, projets, etc.)
     const keywordWeights = {
-      'chantier': 2,
-      'chantiers': 2,
-      'projet': 2,
-      'projets': 2,
-      'annee': 2,
-      'année': 2,
-      'cette': 1.5,
-      'actuel': 1.5,
-      'actuels': 1.5,
-      'en': 1,
-      'cours': 1,
-      'prevu': 1.5,
-      'prévus': 1.5,
-      'planifié': 1.5,
-      'planifiés': 1.5
+      chantier: 2,
+      chantiers: 2,
+      projet: 2,
+      projets: 2,
+      annee: 2,
+      année: 2,
+      cette: 1.5,
+      actuel: 1.5,
+      actuels: 1.5,
+      en: 1,
+      cours: 1,
+      prevu: 1.5,
+      prévus: 1.5,
+      planifié: 1.5,
+      planifiés: 1.5,
     };
 
     // Calculer un score pondéré pour les mots communs
@@ -748,12 +754,12 @@ export class RagService {
       }
 
       // Recherche de mots similaires (distance de Levenshtein simplifiée)
-      const similarWord = words2.find(w2 => {
+      const similarWord = words2.find((w2) => {
         // Pour les mots courts, autoriser seulement 1 différence, pour les plus longs, 2
         const maxDiff = word.length <= 5 ? 1 : 2;
         // Différence de longueur trop importante
         if (Math.abs(word.length - w2.length) > maxDiff) return false;
-        
+
         // Compter les différences de caractères (algo simplifié)
         let diffCount = 0;
         for (let i = 0; i < Math.min(word.length, w2.length); i++) {

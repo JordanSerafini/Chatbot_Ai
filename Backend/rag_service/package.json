@@ -17,7 +17,9 @@
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
-    "test:e2e": "jest --config ./test/jest-e2e.json"
+    "test:e2e": "jest --config ./test/jest-e2e.json",
+    "reset-collection": "ts-node src/scripts/reset-collection.ts",
+    "test-embeddings": "ts-node src/scripts/test-embeddings.ts"
   },
   "dependencies": {
     "@nestjs/common": "^11.0.1",
@@ -25,6 +27,7 @@
     "@nestjs/core": "^11.0.1",
     "@nestjs/platform-express": "^11.0.1",
     "@types/uuid": "^10.0.0",
+    "axios": "^1.8.4",
     "chromadb": "^2.0.1",
     "chromadb-default-embed": "^2.14.0",
     "reflect-metadata": "^0.2.2",
