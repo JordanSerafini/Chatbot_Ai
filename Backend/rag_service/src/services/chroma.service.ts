@@ -287,23 +287,55 @@ export class ChromaService implements OnModuleInit {
         });
         this.logger.log(`Collection ${this.COLLECTION_NAME} supprimée avec succès`);
         this.collection = undefined;
+        
+        // Recréer immédiatement la collection
+        this.logger.log(`Recréation de la collection ${this.COLLECTION_NAME}...`);
+        this.collection = await this.client.createCollection({
+          name: this.COLLECTION_NAME,
+          metadata: { description: 'Collection des questions pour le chatbot' },
+          embeddingFunction: this.embeddingFunction,
+        });
+        this.logger.log(`Collection ${this.COLLECTION_NAME} recréée avec succès`);
+        
         return true;
       } else {
-        this.logger.log(`Collection ${this.COLLECTION_NAME} n'existe pas, rien à supprimer`);
+        this.logger.log(`Collection ${this.COLLECTION_NAME} n'existe pas, création d'une nouvelle collection`);
+        this.collection = await this.client.createCollection({
+          name: this.COLLECTION_NAME,
+          metadata: { description: 'Collection des questions pour le chatbot' },
+          embeddingFunction: this.embeddingFunction,
+        });
+        this.logger.log(`Collection ${this.COLLECTION_NAME} créée avec succès`);
         return false;
       }
     } catch (error) {
-      this.logger.error(`Erreur lors de la suppression de la collection:`, error);
+      this.logger.error(`Erreur lors de la suppression/recréation de la collection:`, error);
       throw error;
     }
   }
 
   async getCount(): Promise<number> {
-    if (!this.collection) {
-      this.logger.error('Collection non initialisée dans getCount');
-      return 0;
+    try {
+      if (!this.collection) {
+        const collections = await this.client.listCollections();
+        if (collections.includes(this.COLLECTION_NAME)) {
+          this.collection = await this.client.getCollection({
+            name: this.COLLECTION_NAME,
+            embeddingFunction: this.embeddingFunction,
+          });
+        } else {
+          return 0;
+        }
+      }
+      
+      const count = await this.collection.count();
+      return count;
+    } catch (error) {
+      if (error.message && error.message.includes('does not exist')) {
+        return 0;
+      }
+      throw error;
     }
-    return await this.collection.count();
   }
 
   /**

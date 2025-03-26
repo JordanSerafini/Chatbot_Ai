@@ -4,7 +4,7 @@ import {
   Collection,
   GetCollectionParams,
   Metadata,
-  IEmbeddingFunction,
+  DefaultEmbeddingFunction,
 } from 'chromadb';
 import * as fs from 'fs/promises';
 import * as path from 'path';
@@ -47,7 +47,7 @@ export class SqlQueriesService {
   private readonly client: ChromaClient;
   private readonly COLLECTION_NAME = 'sql_queries';
   private readonly HASH_COLLECTION_NAME = 'query_hashes';
-  private readonly embeddingFunction: IEmbeddingFunction;
+  private readonly embeddingFunction = new DefaultEmbeddingFunction();
   private collection: Collection;
   private hashCollection: Collection;
 
@@ -58,19 +58,6 @@ export class SqlQueriesService {
     this.client = new ChromaClient({
       path: chromaUrl,
     });
-    // Utiliser une fonction d'embedding personnalisée
-    this.embeddingFunction = {
-      generate: (texts: string[]): Promise<number[][]> => {
-        // Implémentation simple qui génère des vecteurs aléatoires
-        return Promise.resolve(
-          texts.map(() =>
-            Array(1536)
-              .fill(0)
-              .map(() => Math.random() * 2 - 1),
-          ),
-        );
-      },
-    };
   }
 
   private calculateHash(query: QueryData): string {

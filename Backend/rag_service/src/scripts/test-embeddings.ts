@@ -2,7 +2,7 @@ import { NestFactory } from '@nestjs/core';
 import { AppModule } from '../app.module';
 import { ChromaService } from '../services/chroma.service';
 import { Logger } from '@nestjs/common';
-import axios from 'axios';
+import { DefaultEmbeddingFunction } from 'chromadb';
 
 async function testEmbeddings() {
   const logger = new Logger('TestEmbeddings');
@@ -10,25 +10,49 @@ async function testEmbeddings() {
   const chromaService = app.get(ChromaService);
 
   try {
-    // Test du service d'embeddings
-    logger.log("Test du service d'embeddings...");
+    // Test des embeddings via DefaultEmbeddingFunction
+    logger.log(
+      "Test du service d'embeddings par défaut (DefaultEmbeddingFunction)...",
+    );
+
+    const embeddingFunction = new DefaultEmbeddingFunction();
     const testTexts = [
       'Comment obtenir la liste des clients actifs ?',
       'Quels sont les projets en cours ?',
       'Montrez-moi les factures impayées',
     ];
 
-    const response = await axios.post('http://embedding-service:8001/embed', {
-      texts: testTexts,
-    });
+    logger.log('Génération des embeddings pour les exemples...');
+    const embeddings = await embeddingFunction.generate(testTexts);
 
-    logger.log("Réponse du service d'embeddings:");
-    logger.log(
-      `Nombre d'embeddings générés: ${response.data.embeddings.length}`,
-    );
-    logger.log(
-      `Dimension des embeddings: ${response.data.embeddings[0].length}`,
-    );
+    logger.log(`Nombre d'embeddings générés: ${embeddings.length}`);
+    logger.log(`Dimension des embeddings: ${embeddings[0].length}`);
+
+    // Test de l'ajout de questions
+    logger.log("\nTest d'ajout de questions à ChromaDB...");
+    const testQuestions = [
+      {
+        id: 'q1',
+        question: 'Comment obtenir la liste des clients actifs ?',
+        sql: 'SELECT * FROM clients WHERE actif = true',
+        description: 'Requête listant tous les clients actifs',
+      },
+      {
+        id: 'q2',
+        question: 'Quels sont les projets en cours ?',
+        sql: 'SELECT * FROM projets WHERE statut = "en_cours"',
+        description: 'Requête listant tous les projets en cours',
+      },
+      {
+        id: 'q3',
+        question: 'Montrez-moi les factures impayées',
+        sql: 'SELECT * FROM factures WHERE statut = "impayée"',
+        description: 'Requête listant toutes les factures impayées',
+      },
+    ];
+
+    await chromaService.addQuestions(testQuestions);
+    logger.log('Questions ajoutées avec succès');
 
     // Test de la recherche sémantique
     logger.log('\nTest de la recherche sémantique...');

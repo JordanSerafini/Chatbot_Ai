@@ -32,20 +32,22 @@ services:
     networks:
       - app-network
 
-  zipkin:
-    container_name: zipkin
-    image: openzipkin/zipkin
-    ports:
-      - "9411:9411"
-    depends_on: [otel-collector]
-    networks:
-      - app-network
   otel-collector:
     container_name: otel-collector
     image: otel/opentelemetry-collector-contrib:0.111.0
     command: ["--config=/etc/otel-collector-config.yaml"]
     volumes:
       - ./ChromaDB/otel-collector-config.yaml:/etc/otel-collector-config.yaml
+    networks:
+      - app-network
+
+  zipkin:
+    container_name: zipkin
+    image: openzipkin/zipkin
+    ports:
+      - "9411:9411"
+    depends_on: 
+      - otel-collector
     networks:
       - app-network
       
@@ -64,6 +66,7 @@ services:
     depends_on:
       - otel-collector
       - zipkin
+    restart: on-failure
 
   rag_service:
     container_name: rag_service
@@ -84,6 +87,7 @@ services:
       - CHROMA_URL=http://ChromaDB:8000
     depends_on:
       - ChromaDB
+    restart: on-failure
 
   chatbot_agent:
     container_name: chatbot_agent
@@ -104,6 +108,7 @@ services:
       - RAG_SERVICE_URL=http://rag_service:3002
     depends_on:
       - rag_service
+    restart: on-failure
 
 networks:
   app-network:
