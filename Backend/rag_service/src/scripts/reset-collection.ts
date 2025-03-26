@@ -19,4 +19,7 @@ async function resetCollection() {
   }
 }
 
-resetCollection();
+resetCollection().catch((error) => {
+  console.error('Erreur fatale:', error);
+  process.exit(1);
+});
