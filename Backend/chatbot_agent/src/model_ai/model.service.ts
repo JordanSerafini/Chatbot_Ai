@@ -719,65 +719,7 @@ export class ModelService {
         .normalize('NFD')
         .replace(/[\u0300-\u036f]/g, '');
 
-      // Préparer le prompt avec les options (uniquement les questions, sans autres détails)
-      let optionsText = '';
-      options.forEach((option, index) => {
-        optionsText += `Option ${index + 1}: "${option.question}"\n`;
-      });
-
-      // Prompt très simple et direct pour LM Studio
-      const prompt = `
-Question originale: "${question}"
-
-Options:
-${optionsText}
-
-INSTRUCTIONS: Compare la question originale avec chaque option. Choisis l'option qui est sémantiquement la plus proche.
-RETOURNE UNIQUEMENT LE NUMÉRO de l'option choisie (1, 2, 3, etc.).`;
-
-      try {
-        // Envoyer le prompt à LM Studio avec des paramètres optimisés pour une réponse courte
-        const response = await axios.post(
-          `${this.getLmStudioUrl()}/completions`,
-          {
-            prompt,
-            max_tokens: 10,
-            temperature: 0.1,
-            top_p: 0.95,
-            frequency_penalty: 0.0,
-            stop: ['\n', ' '],
-          },
-          { timeout: 10000 },
-        );
-
-        // Extraire le numéro de l'option choisie
-        const generatedText = response.data.choices[0].text.trim();
-        this.logger.log(`Réponse de LM Studio: "${generatedText}"`);
-
-        // Extraction stricte d'un numéro
-        const numericResponse = generatedText.replace(/\D/g, '');
-        
-        if (numericResponse && numericResponse.length > 0) {
-          const selectedIndex = parseInt(numericResponse, 10) - 1;
-          if (selectedIndex >= 0 && selectedIndex < options.length) {
-            const selectedOption = options[selectedIndex];
-            this.logger.log(
-              `Option sélectionnée par LM Studio: "${selectedOption.question}"`,
-            );
-            return selectedOption;
-          }
-        }
-
-        this.logger.warn(
-          `LM Studio n'a pas retourné de numéro valide (réponse: "${generatedText}"). Utilisation de la méthode par score.`,
-        );
-      } catch (llmError) {
-        this.logger.error(
-          `Erreur lors de l'appel à LM Studio: ${llmError.message}. Utilisation de la méthode par score.`,
-        );
-      }
-
-      // Méthode par score si LLM échoue
+      // Essayer d'abord une approche purement basée sur le score
       const scoredOptions = options.map((option) => {
         const normalizedOptionQuestion = option.question
           .toLowerCase()
@@ -841,11 +783,74 @@ RETOURNE UNIQUEMENT LE NUMÉRO de l'option choisie (1, 2, 3, etc.).`;
         return a.option.distance - b.option.distance;
       });
 
+      // Vérifier si le meilleur score est significativement supérieur aux autres
       const bestMatch = scoredOptions[0].option;
-      this.logger.log(
-        `Option sélectionnée par score: "${bestMatch.question}" (score: ${scoredOptions[0].score})`,
-      );
+      const bestScore = scoredOptions[0].score;
+      const secondBestScore = scoredOptions.length > 1 ? scoredOptions[1].score : 0;
 
+      // Si la méthode par score est confiante (score élevé et écart significatif), l'utiliser directement
+      if (bestScore > 30 && bestScore > secondBestScore * 1.5) {
+        this.logger.log(
+          `Option sélectionnée par score (confiance élevée): "${bestMatch.question}" (score: ${bestScore})`,
+        );
+        return bestMatch;
+      }
+
+      // Si la méthode par score n'est pas confiante, essayer LM Studio comme dernier recours
+      // Préparer un prompt extrêmement simple pour LM Studio
+      let optionsText = '';
+      options.forEach((option, index) => {
+        optionsText += `Option ${index + 1}: ${option.question}\n`;
+      });
+
+      // Prompt très simple et direct pour LM Studio
+      const prompt = `Question: "${question}"\nOptions:\n${optionsText}\nRéponse (numéro):`;
+
+      try {
+        // Envoyer le prompt à LM Studio avec des paramètres optimisés pour une réponse courte
+        const response = await axios.post(
+          `${this.getLmStudioUrl()}/completions`,
+          {
+            prompt,
+            max_tokens: 5,
+            temperature: 0.0,
+            top_p: 1.0,
+            frequency_penalty: 0.0,
+            stop: ['\n', ' ', '.'],
+          },
+          { timeout: 5000 },
+        );
+
+        // Extraire le numéro de l'option choisie
+        const generatedText = response.data.choices[0].text.trim();
+        this.logger.log(`Réponse de LM Studio: "${generatedText}"`);
+
+        // Extraction stricte d'un numéro
+        const numericResponse = generatedText.replace(/\D/g, '');
+        if (numericResponse && numericResponse.length > 0) {
+          const selectedIndex = parseInt(numericResponse, 10) - 1;
+          if (selectedIndex >= 0 && selectedIndex < options.length) {
+            const selectedOption = options[selectedIndex];
+            this.logger.log(
+              `Option sélectionnée par LM Studio: "${selectedOption.question}"`,
+            );
+            return selectedOption;
+          }
+        }
+
+        this.logger.warn(
+          `LM Studio n'a pas retourné de numéro valide (réponse: "${generatedText}"). Utilisation de la méthode par score.`,
+        );
+      } catch (llmError) {
+        this.logger.error(
+          `Erreur lors de l'appel à LM Studio: ${llmError.message}. Utilisation de la méthode par score.`,
+        );
+      }
+
+      // Utiliser le résultat de la méthode par score comme fallback
+      this.logger.log(
+        `Option sélectionnée par score (fallback): "${bestMatch.question}" (score: ${bestScore})`,
+      );
       return bestMatch;
     } catch (error) {
       this.logger.error(`Erreur lors de la sélection: ${error.message}`);
