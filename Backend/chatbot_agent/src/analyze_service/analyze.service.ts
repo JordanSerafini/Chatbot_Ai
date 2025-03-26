@@ -30,5 +30,8 @@ export class AnalyseService {
     }
   }
 
-  private getSimilarQuestions(question: string): Promise<RagQuestion> {}
+  private getSimilarQuestions(question: string): Promise<RagQuestion> {
+  try {
+    cons
+  }
 }
