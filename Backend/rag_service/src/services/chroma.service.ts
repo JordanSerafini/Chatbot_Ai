@@ -278,28 +278,38 @@ export class ChromaService implements OnModuleInit {
 
   async deleteCollection() {
     try {
-      this.logger.log(`Tentative de suppression de la collection ${this.COLLECTION_NAME}`);
+      this.logger.log(
+        `Tentative de suppression de la collection ${this.COLLECTION_NAME}`,
+      );
       // Vérifier si la collection existe
       const collections = await this.client.listCollections();
       if (collections.includes(this.COLLECTION_NAME)) {
         await this.client.deleteCollection({
           name: this.COLLECTION_NAME,
         });
-        this.logger.log(`Collection ${this.COLLECTION_NAME} supprimée avec succès`);
+        this.logger.log(
+          `Collection ${this.COLLECTION_NAME} supprimée avec succès`,
+        );
         this.collection = undefined;
-        
+
         // Recréer immédiatement la collection
-        this.logger.log(`Recréation de la collection ${this.COLLECTION_NAME}...`);
+        this.logger.log(
+          `Recréation de la collection ${this.COLLECTION_NAME}...`,
+        );
         this.collection = await this.client.createCollection({
           name: this.COLLECTION_NAME,
           metadata: { description: 'Collection des questions pour le chatbot' },
           embeddingFunction: this.embeddingFunction,
         });
-        this.logger.log(`Collection ${this.COLLECTION_NAME} recréée avec succès`);
-        
+        this.logger.log(
+          `Collection ${this.COLLECTION_NAME} recréée avec succès`,
+        );
+
         return true;
       } else {
-        this.logger.log(`Collection ${this.COLLECTION_NAME} n'existe pas, création d'une nouvelle collection`);
+        this.logger.log(
+          `Collection ${this.COLLECTION_NAME} n'existe pas, création d'une nouvelle collection`,
+        );
         this.collection = await this.client.createCollection({
           name: this.COLLECTION_NAME,
           metadata: { description: 'Collection des questions pour le chatbot' },
@@ -309,7 +319,10 @@ export class ChromaService implements OnModuleInit {
         return false;
       }
     } catch (error) {
-      this.logger.error(`Erreur lors de la suppression/recréation de la collection:`, error);
+      this.logger.error(
+        `Erreur lors de la suppression/recréation de la collection:`,
+        error,
+      );
       throw error;
     }
   }
@@ -327,7 +340,7 @@ export class ChromaService implements OnModuleInit {
           return 0;
         }
       }
-      
+
       const count = await this.collection.count();
       return count;
     } catch (error) {

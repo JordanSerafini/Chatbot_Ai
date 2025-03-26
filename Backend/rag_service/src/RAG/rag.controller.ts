@@ -94,18 +94,32 @@ export class RagController {
 
       // Analyser la question pour détecter des patterns spécifiques
       const lowerQuestion = question.toLowerCase().trim();
-      
+
       // Détection pour les questions sur les chantiers de cette année
-      if (/chantier.*(?:cette année|année en cours|cette anné|annee|cet an)/i.test(lowerQuestion) ||
-          /(?:cette année|année en cours|cette anné|annee|cet an).*chantier/i.test(lowerQuestion) ||
-          /(?:projet|projets).*(?:cette année|année en cours|cette anné|annee|cet an)/i.test(lowerQuestion) ||
-          /(?:cette année|année en cours|cette anné|annee|cet an).*(?:projet|projets)/i.test(lowerQuestion)) {
-        
-        this.logger.log(`Question détectée comme demande de chantiers pour cette année`);
-        
+      if (
+        /chantier.*(?:cette année|année en cours|cette anné|annee|cet an)/i.test(
+          lowerQuestion,
+        ) ||
+        /(?:cette année|année en cours|cette anné|annee|cet an).*chantier/i.test(
+          lowerQuestion,
+        ) ||
+        /(?:projet|projets).*(?:cette année|année en cours|cette anné|annee|cet an)/i.test(
+          lowerQuestion,
+        ) ||
+        /(?:cette année|année en cours|cette anné|annee|cet an).*(?:projet|projets)/i.test(
+          lowerQuestion,
+        )
+      ) {
+        this.logger.log(
+          `Question détectée comme demande de chantiers pour cette année`,
+        );
+
         // Forcer l'utilisation de la requête "projects_this_year"
-        const sqlMetadata = await this.sqlQueriesService.getQueryMetadataById('projects_this_year');
-        
+        const sqlMetadata =
+          await this.sqlQueriesService.getQueryMetadataById(
+            'projects_this_year',
+          );
+
         if (sqlMetadata) {
           return {
             question,
@@ -122,8 +136,8 @@ export class RagController {
               queryId: 'projects_this_year',
               sql: sqlMetadata.sql,
               description: sqlMetadata.description,
-              similarity: 0.95
-            }
+              similarity: 0.95,
+            },
           };
         }
       }
@@ -298,10 +312,27 @@ export class RagController {
   async findSimilarQuestions(
     @Body() questionDto: QuestionDto,
   ): Promise<SimilarQuestion[]> {
-    return await this.chromaService.findSimilarQuestions(
-      questionDto.question,
-      questionDto.nResults || 5,
-    );
+    try {
+      const collections = await this.ragService
+        .getChromaClient()
+        .listCollections();
+      this.logger.log(
+        `Collections disponibles: ${JSON.stringify(collections)}`,
+      );
+      this.logger.log(`Recherche pour la question: "${questionDto.question}"`);
+
+      const results = await this.chromaService.findSimilarQuestions(
+        questionDto.question,
+        questionDto.nResults || 5,
+      );
+
+      this.logger.log(`Résultats trouvés: ${results.length}`);
+
+      return results;
+    } catch (error) {
+      this.logger.error(`Erreur lors de la recherche: ${error.message}`);
+      throw error;
+    }
   }
 
   @Get('similar')
@@ -312,10 +343,28 @@ export class RagController {
     if (!question) {
       throw new BadRequestException('Le paramètre "question" est requis');
     }
-    return await this.chromaService.findSimilarQuestions(
-      question,
-      limit ? parseInt(limit.toString(), 10) : 5,
-    );
+
+    try {
+      const collections = await this.ragService
+        .getChromaClient()
+        .listCollections();
+      this.logger.log(
+        `Collections disponibles: ${JSON.stringify(collections)}`,
+      );
+      this.logger.log(`Recherche pour la question: "${question}"`);
+
+      const results = await this.chromaService.findSimilarQuestions(
+        question,
+        limit ? parseInt(limit.toString(), 10) : 5,
+      );
+
+      this.logger.log(`Résultats trouvés: ${results.length}`);
+
+      return results;
+    } catch (error) {
+      this.logger.error(`Erreur lors de la recherche: ${error.message}`);
+      throw error;
+    }
   }
 
   @Post('analyse')
@@ -332,5 +381,24 @@ export class RagController {
       .join('\n\n');
     console.log(sqlQueries);
     // ... suite du traitement
+  }
+
+  @Get('collections')
+  async listCollections() {
+    try {
+      const collections = await this.ragService
+        .getChromaClient()
+        .listCollections();
+      return {
+        collections,
+        count: collections.length,
+        timestamp: new Date().toISOString(),
+      };
+    } catch (error) {
+      throw new HttpException(
+        `Erreur lors de la liste des collections: ${error.message}`,
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
   }
 }

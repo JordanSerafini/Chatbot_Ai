@@ -16,35 +16,54 @@ export class InitService implements OnModuleInit {
       // Attendre que ChromaDB soit complètement démarré
       await new Promise((resolve) => setTimeout(resolve, 5000));
 
-      // Réinitialiser complètement la collection
-      await this.chromaService.deleteCollection();
-      this.logger.log('Collection réinitialisée avec succès');
+      // Vérifier si la collection contient déjà des données avant de la réinitialiser
+      const count = await this.chromaService.getCount();
+      this.logger.log(`Collection existante contient ${count} éléments`);
 
-      // Attendre un peu pour que ChromaDB traite la création de la collection
-      await new Promise((resolve) => setTimeout(resolve, 2000));
+      // Ne réinitialiser que si la collection est vide
+      if (count === 0) {
+        // Réinitialiser complètement la collection
+        await this.chromaService.deleteCollection();
+        this.logger.log('Collection réinitialisée avec succès');
 
-      try {
-        // Vérifier si la collection existe et contient des données
-        const count = await this.chromaService.getCount();
-        this.logger.log(`Nombre d'éléments dans la collection: ${count}`);
+        // Attendre un peu pour que ChromaDB traite la création de la collection
+        await new Promise((resolve) => setTimeout(resolve, 2000));
 
-        // Charger les requêtes SQL
-        this.logger.log('Chargement des requêtes SQL...');
-        const result = await this.sqlQueriesService.resetSqlQueriesCollection();
-        this.logger.log(`Initialisation terminée: ${result.message}`);
-      } catch (error) {
-        // Si l'erreur concerne une collection inexistante, on l'initialise
-        this.logger.error(
-          'Erreur lors de la vérification/initialisation:',
-          error,
+        try {
+          // Vérifier à nouveau le compte
+          const newCount = await this.chromaService.getCount();
+          this.logger.log(`Nombre d'éléments dans la collection: ${newCount}`);
+
+          // Charger les requêtes SQL
+          this.logger.log('Chargement des requêtes SQL...');
+          const result =
+            await this.sqlQueriesService.resetSqlQueriesCollection();
+          this.logger.log(`Initialisation terminée: ${result.message}`);
+        } catch (error) {
+          // Si l'erreur concerne une collection inexistante, on l'initialise
+          this.logger.error(
+            'Erreur lors de la vérification/initialisation:',
+            error,
+          );
+          this.logger.log("Nouvelle tentative d'initialisation...");
+
+          // Attendre un peu et réessayer
+          await new Promise((resolve) => setTimeout(resolve, 3000));
+
+          const result =
+            await this.sqlQueriesService.resetSqlQueriesCollection();
+          this.logger.log(`Initialisation forcée terminée: ${result.message}`);
+        }
+      } else {
+        this.logger.log(
+          `Collection déjà initialisée avec ${count} documents, aucune réinitialisation nécessaire`,
         );
-        this.logger.log("Nouvelle tentative d'initialisation...");
 
-        // Attendre un peu et réessayer
-        await new Promise((resolve) => setTimeout(resolve, 3000));
-
+        // Vérifier quand même si les requêtes SQL ont besoin d'être mises à jour
         const result = await this.sqlQueriesService.resetSqlQueriesCollection();
-        this.logger.log(`Initialisation forcée terminée: ${result.message}`);
+        this.logger.log(
+          `Vérification des requêtes SQL terminée: ${result.message}`,
+        );
       }
     } catch (error) {
       this.logger.error("Erreur lors de l'initialisation de ChromaDB:", error);
