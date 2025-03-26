@@ -15,6 +15,9 @@ export class ChromaService implements OnModuleInit {
   private collection: Collection | undefined;
   private readonly COLLECTION_NAME = 'questions_collection';
   private readonly embeddingFunction = new DefaultEmbeddingFunction();
+  private connectionRetries = 0;
+  private readonly MAX_RETRIES = 10;
+  private readonly RETRY_DELAY = 5000; // 5 secondes
 
   constructor(private configService: ConfigService) {
     const chromaUrl =
@@ -26,6 +29,10 @@ export class ChromaService implements OnModuleInit {
   }
 
   async onModuleInit() {
+    await this.initializeWithRetry();
+  }
+
+  private async initializeWithRetry(retryCount = 0): Promise<void> {
     try {
       // On vérifie d'abord si la collection existe
       const collections = await this.client.listCollections();
@@ -58,25 +65,54 @@ export class ChromaService implements OnModuleInit {
         });
         this.logger.log('Collection créée avec succès');
       }
+
+      // Réinitialiser le compteur de tentatives en cas de succès
+      this.connectionRetries = 0;
     } catch (error) {
       this.logger.error(
         "Erreur lors de l'initialisation de la collection:",
         error,
       );
 
-      try {
-        // On tente de créer la collection en dernier recours
-        this.collection = await this.client.createCollection({
-          name: this.COLLECTION_NAME,
-          metadata: { description: 'Collection des questions pour le chatbot' },
-          embeddingFunction: this.embeddingFunction,
-        });
-        this.logger.log('Collection créée avec succès (après erreur)');
-      } catch (finalError) {
-        this.logger.error(
-          "Erreur fatale lors de l'initialisation de ChromaDB:",
-          finalError,
+      if (retryCount < this.MAX_RETRIES) {
+        this.logger.log(
+          `Tentative de reconnexion ${retryCount + 1}/${this.MAX_RETRIES} dans ${this.RETRY_DELAY / 1000} secondes...`,
         );
+
+        // Attendre avant de réessayer
+        await new Promise((resolve) => setTimeout(resolve, this.RETRY_DELAY));
+
+        // Réessayer avec une nouvelle instance du client
+        const chromaUrl =
+          this.configService.get<string>('CHROMA_URL') ||
+          'http://ChromaDB:8000';
+
+        this.client = new ChromaClient({
+          path: chromaUrl,
+        });
+
+        await this.initializeWithRetry(retryCount + 1);
+      } else {
+        this.logger.error(
+          `Échec des ${this.MAX_RETRIES} tentatives de connexion à ChromaDB. Abandon.`,
+        );
+
+        try {
+          // On tente de créer la collection en dernier recours
+          this.collection = await this.client.createCollection({
+            name: this.COLLECTION_NAME,
+            metadata: {
+              description: 'Collection des questions pour le chatbot',
+            },
+            embeddingFunction: this.embeddingFunction,
+          });
+          this.logger.log('Collection créée avec succès (après erreur)');
+        } catch (finalError) {
+          this.logger.error(
+            "Erreur fatale lors de l'initialisation de ChromaDB:",
+            finalError,
+          );
+        }
       }
     }
   }
@@ -102,8 +138,65 @@ export class ChromaService implements OnModuleInit {
     return extendedHash;
   }
 
-  async addQuestions(questions: Question[]) {
+  // Méthode pour reconnecter le client ChromaDB
+  private async reconnectClient(): Promise<void> {
+    this.connectionRetries++;
+    if (this.connectionRetries > this.MAX_RETRIES) {
+      this.logger.error('Nombre maximal de tentatives de reconnexion atteint');
+      return;
+    }
+
     try {
+      this.logger.log(
+        `Tentative de reconnexion à ChromaDB (${this.connectionRetries}/${this.MAX_RETRIES})...`,
+      );
+
+      const chromaUrl =
+        this.configService.get<string>('CHROMA_URL') || 'http://ChromaDB:8000';
+      this.client = new ChromaClient({
+        path: chromaUrl,
+      });
+      await this.client.listCollections();
+      this.logger.log('Reconnexion à ChromaDB réussie');
+    } catch (error) {
+      this.logger.warn(
+        `Échec de la tentative de reconnexion: ${error.message}`,
+      );
+      await new Promise((resolve) => setTimeout(resolve, this.RETRY_DELAY));
+    }
+  }
+
+  // Wrapper pour exécuter des opérations avec reconnexion automatique
+  private async executeWithRetry<T>(operation: () => Promise<T>): Promise<T> {
+    let retries = 0;
+
+    while (retries <= this.MAX_RETRIES) {
+      try {
+        return await operation();
+      } catch (error) {
+        this.logger.error(`Erreur lors de l'opération: ${error.message}`);
+        retries++;
+
+        if (retries <= this.MAX_RETRIES) {
+          this.logger.log(
+            `Tentative ${retries}/${this.MAX_RETRIES} dans ${this.RETRY_DELAY / 1000} secondes...`,
+          );
+          await this.reconnectClient();
+          await new Promise((resolve) => setTimeout(resolve, this.RETRY_DELAY));
+        } else {
+          this.logger.error(`Échec après ${this.MAX_RETRIES} tentatives`);
+          throw error;
+        }
+      }
+    }
+
+    throw new Error(
+      `Échec de l'opération après ${this.MAX_RETRIES} tentatives`,
+    );
+  }
+
+  async addQuestions(questions: Question[]) {
+    return this.executeWithRetry(async () => {
       if (!this.collection) {
         this.logger.warn(
           'Collection non initialisée, tentative de récupération...',
@@ -150,68 +243,127 @@ export class ChromaService implements OnModuleInit {
         documents,
         metadatas,
       });
-    } catch (error) {
-      this.logger.error('Erreur dans addQuestions:', error);
-      throw error;
-    }
+    });
   }
 
   async findSimilarQuestions(
     question: string,
     nResults: number = 5,
   ): Promise<SimilarQuestion[]> {
-    if (!this.collection) {
-      this.logger.error('Collection non initialisée dans findSimilarQuestions');
-      return [];
-    }
-
-    try {
-      // Utiliser la recherche en texte intégral de ChromaDB
-      const results = await this.collection.query({
-        queryTexts: [question],
-        nResults: Math.min(50, nResults * 5),
-      });
-
-      if (!results || !results.documents || results.documents.length === 0) {
+    return this.executeWithRetry(async () => {
+      if (!this.collection) {
+        this.logger.error(
+          'Collection non initialisée dans findSimilarQuestions',
+        );
         return [];
       }
 
-      // Ensuite, réordonnons les résultats en fonction de la similarité textuelle
-      const candidates = results.documents[0].map((doc, index) => ({
-        question: doc || '',
-        metadata: {
-          sql: (results.metadatas[0][index] as any)?.sql || '',
-          description: (results.metadatas[0][index] as any)?.description || '',
-          parameters: (results.metadatas[0][index] as any)?.parameters || [],
-        },
-        distance: results.distances ? results.distances[0][index] : 0,
-      }));
+      try {
+        this.logger.log(`Recherche pour la question: "${question}"`);
 
-      // Calculer un score de similarité textuelle plus précis
-      const scoredCandidates = candidates.map((candidate) => {
-        const similarityScore = this.calculateTextualSimilarity(
-          question.toLowerCase(),
-          candidate.question.toLowerCase(),
+        // Prétraitement de la question
+        const normalizedQuestion = this.normalizeQuestion(question);
+
+        // Vérifier si la question contient des mots-clés spécifiques liés aux devis
+        const isQuotationRelated = this.isQuotationRelated(normalizedQuestion);
+
+        // Utiliser la recherche en texte intégral de ChromaDB
+        const results = await this.collection.query({
+          queryTexts: [normalizedQuestion],
+          nResults: Math.min(50, nResults * 5),
+        });
+
+        if (!results || !results.documents || results.documents.length === 0) {
+          this.logger.warn('Aucun résultat trouvé dans ChromaDB');
+          return [];
+        }
+
+        // Ensuite, réordonnons les résultats en fonction de la similarité textuelle
+        const candidates = results.documents[0].map((doc, index) => ({
+          question: doc || '',
+          metadata: {
+            sql: (results.metadatas[0][index] as any)?.sql || '',
+            description:
+              (results.metadatas[0][index] as any)?.description || '',
+            parameters: (results.metadatas[0][index] as any)?.parameters || [],
+          },
+          distance: results.distances ? results.distances[0][index] : 0,
+          isDevis: this.isQuotationRelated(doc || ''),
+        }));
+
+        // Calculer un score de similarité textuelle plus précis
+        const scoredCandidates = candidates.map((candidate) => {
+          const textSimilarity = this.calculateTextualSimilarity(
+            normalizedQuestion,
+            candidate.question.toLowerCase(),
+          );
+
+          // Boosting: Si la question de l'utilisateur concerne les devis,
+          // privilégier les résultats liés aux devis dans le scoring
+          let finalScore = textSimilarity;
+          if (isQuotationRelated && candidate.isDevis) {
+            finalScore = textSimilarity * 0.8; // Score inférieur = meilleur match dans le tri
+          }
+
+          return {
+            ...candidate,
+            distance: finalScore,
+          };
+        });
+
+        // Trier par similarité et prendre les N meilleurs
+        const sortedResults = scoredCandidates
+          .sort((a, b) => a.distance - b.distance)
+          .slice(0, nResults);
+
+        this.logger.log(`Nombre de résultats trouvés: ${sortedResults.length}`);
+
+        return sortedResults.map((result) => ({
+          question: result.question,
+          metadata: result.metadata,
+          distance: result.distance,
+        }));
+      } catch (error) {
+        this.logger.error(
+          'Erreur lors de la recherche de questions similaires:',
+          error,
         );
-        return {
-          ...candidate,
-          distance: similarityScore,
-        };
-      });
+        return [];
+      }
+    });
+  }
 
-      // Trier par similarité et prendre les N meilleurs
-      const sortedResults = scoredCandidates
-        .sort((a, b) => a.distance - b.distance)
-        .slice(0, nResults);
+  // Normalise la question pour la recherche
+  private normalizeQuestion(question: string): string {
+    return question
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '') // Supprimer les accents
+      .replace(/[^\w\s]/g, ' ') // Remplacer la ponctuation par des espaces
+      .replace(/\s+/g, ' ') // Réduire les espaces multiples
+      .trim();
+  }
 
-      return sortedResults;
-    } catch (error) {
-      this.logger.error(
-        'Erreur lors de la recherche de questions similaires:',
-        error,
-      );
-      return [];
-    }
+  // Vérifie si la question est liée aux devis
+  private isQuotationRelated(text: string): boolean {
+    const quotationKeywords = [
+      'devis',
+      'offre',
+      'proposition',
+      'commerciale',
+      'cotation',
+      'tarif',
+      'estimation',
+      'chiffrage',
+      'devis',
+      'quotation',
+      'quote',
+    ];
+
+    const normalizedText = text.toLowerCase();
+    return quotationKeywords.some((keyword) =>
+      normalizedText.includes(keyword),
+    );
   }
 
   // Fonction qui calcule un score de similarité entre deux textes
@@ -277,7 +429,7 @@ export class ChromaService implements OnModuleInit {
   }
 
   async deleteCollection() {
-    try {
+    return this.executeWithRetry(async () => {
       this.logger.log(
         `Tentative de suppression de la collection ${this.COLLECTION_NAME}`,
       );
@@ -318,17 +470,11 @@ export class ChromaService implements OnModuleInit {
         this.logger.log(`Collection ${this.COLLECTION_NAME} créée avec succès`);
         return false;
       }
-    } catch (error) {
-      this.logger.error(
-        `Erreur lors de la suppression/recréation de la collection:`,
-        error,
-      );
-      throw error;
-    }
+    });
   }
 
   async getCount(): Promise<number> {
-    try {
+    return this.executeWithRetry(async () => {
       if (!this.collection) {
         const collections = await this.client.listCollections();
         if (collections.includes(this.COLLECTION_NAME)) {
@@ -343,12 +489,7 @@ export class ChromaService implements OnModuleInit {
 
       const count = await this.collection.count();
       return count;
-    } catch (error) {
-      if (error.message && error.message.includes('does not exist')) {
-        return 0;
-      }
-      throw error;
-    }
+    });
   }
 
   /**
@@ -359,12 +500,17 @@ export class ChromaService implements OnModuleInit {
     try {
       // Tente de lister les collections pour vérifier la connexion
       await this.client.listCollections();
+      this.connectionRetries = 0; // Réinitialiser le compteur en cas de succès
       return true;
     } catch (error) {
       this.logger.error(
         'Erreur lors de la vérification de la santé de ChromaDB:',
         error,
       );
+
+      // Tentative de reconnexion automatique
+      await this.reconnectClient();
+
       throw error;
     }
   }

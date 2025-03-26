@@ -79,7 +79,9 @@ export class ModelController {
   }
 
   @Post('query')
-  async generateResponseFromController(@Body() queryDto: QueryDto): Promise<RagResponse> {
+  async generateResponseFromController(
+    @Body() queryDto: QueryDto,
+  ): Promise<RagResponse> {
     this.logger.log(`Received question: ${queryDto.question}`);
 
     const response = await this.modelService.generateResponse(

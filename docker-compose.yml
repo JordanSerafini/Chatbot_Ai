@@ -63,10 +63,17 @@ services:
     environment:
       - CHROMA_SERVER_CORS_ALLOW_ORIGINS=["*"]
       - CHROMA_PERSIST_DIRECTORY=/chroma/chroma
+      - ALLOW_RESET=True
     depends_on:
       - otel-collector
       - zipkin
-    restart: on-failure
+    restart: always
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
   rag_service:
     container_name: rag_service
@@ -86,7 +93,8 @@ services:
       - PORT=3002
       - CHROMA_URL=http://ChromaDB:8000
     depends_on:
-      - ChromaDB
+      ChromaDB:
+        condition: service_healthy
     restart: on-failure
 
   chatbot_agent:
@@ -104,7 +112,7 @@ services:
     environment:
       - NODE_ENV=development
       - PORT=3001
-      - LM_STUDIO_URL=https://f201-2a01-cb15-4c5-c200-ff2e-b498-e114-f0c2.ngrok-free.app/v1
+      - LM_STUDIO_URL=http://6523-2a01-cb15-4c5-c200-ff2e-b498-e114-f0c2.ngrok-free.app/v1
       - RAG_SERVICE_URL=http://rag_service:3002
     depends_on:
       - rag_service

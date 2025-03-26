@@ -321,14 +321,54 @@ export class RagController {
       );
       this.logger.log(`Recherche pour la question: "${questionDto.question}"`);
 
-      const results = await this.chromaService.findSimilarQuestions(
+      // Obtenir 5 résultats par recherche sémantique (embedding)
+      const embeddingResults = await this.chromaService.findSimilarQuestions(
         questionDto.question,
-        questionDto.nResults || 5,
+        5, // Limiter à 5 résultats pour les embeddings
       );
 
-      this.logger.log(`Résultats trouvés: ${results.length}`);
+      // Obtenir 5 résultats par recherche par mots-clés
+      // On utilise une approche de recherche textuelle pour diversifier les résultats
+      const keywordMatches = await this.sqlQueriesService.findQueriesByKeywords(
+        questionDto.question,
+        5, // Limiter à 5 résultats pour les mots-clés
+      );
 
-      return results;
+      // Convertir les résultats de mots-clés au même format que les résultats d'embedding
+      const keywordResults: SimilarQuestion[] = keywordMatches.map((match) => ({
+        question: match.question,
+        metadata: {
+          sql: match.sql,
+          description: match.description,
+          parameters: match.parameters || [],
+        },
+        distance: match.similarity, // Utiliser le score de similarité comme distance
+      }));
+
+      // Combiner les deux ensembles de résultats
+      const combinedResults = [...embeddingResults];
+
+      // Ajouter uniquement les résultats de mots-clés qui ne sont pas déjà présents dans les résultats d'embedding
+      // (éviter les doublons basés sur la requête SQL)
+      for (const keywordResult of keywordResults) {
+        const isDuplicate = combinedResults.some(
+          (r) => r.metadata.sql === keywordResult.metadata.sql,
+        );
+
+        if (!isDuplicate) {
+          combinedResults.push(keywordResult);
+        }
+      }
+
+      // Trier l'ensemble combiné par distance (croissante)
+      combinedResults.sort((a, b) => a.distance - b.distance);
+
+      // Limiter à un maximum de 10 résultats
+      const finalResults = combinedResults.slice(0, 10);
+
+      this.logger.log(`Résultats totaux trouvés: ${finalResults.length}`);
+
+      return finalResults;
     } catch (error) {
       this.logger.error(`Erreur lors de la recherche: ${error.message}`);
       throw error;

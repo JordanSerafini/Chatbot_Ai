@@ -411,4 +411,185 @@ export class SqlQueriesService {
       return null;
     }
   }
+
+  /**
+   * Recherche des requêtes SQL en utilisant des mots-clés
+   * @param query Texte de la question utilisateur
+   * @param limit Nombre de résultats à retourner
+   * @returns Liste des requêtes SQL correspondantes
+   */
+  async findQueriesByKeywords(
+    query: string,
+    limit: number = 5,
+  ): Promise<any[]> {
+    try {
+      this.logger.log(`Recherche par mots-clés pour: "${query}"`);
+
+      // Extraire des mots-clés pertinents de la question
+      const keywords = this.extractKeywords(query);
+
+      if (keywords.length === 0) {
+        this.logger.warn(`Aucun mot-clé pertinent trouvé dans: "${query}"`);
+        return [];
+      }
+
+      this.logger.log(`Mots-clés extraits: ${keywords.join(', ')}`);
+
+      // Chargement des fichiers de requêtes
+      const queryDir = path.join(process.cwd(), 'query');
+      const queryFiles = [
+        'clients.query.json',
+        'invoices.query.json',
+        'planning.query.json',
+        'projects.query.json',
+        'quotations.query.json',
+      ];
+
+      let allQueries: QueryData[] = [];
+
+      // Charger toutes les requêtes depuis les fichiers
+      for (const file of queryFiles) {
+        try {
+          const filePath = path.join(queryDir, file);
+          const data = await this.loadQueryFile(filePath);
+          allQueries = [...allQueries, ...data.queries];
+        } catch (error) {
+          this.logger.error(
+            `Erreur lors du chargement du fichier ${file}: ${error.message}`,
+          );
+        }
+      }
+
+      // Calculer les scores de correspondance pour chaque requête
+      const scoredQueries = allQueries.map((query) => {
+        // Créer un texte à partir de toutes les questions et de la description
+        const searchText = [...query.questions, query.description]
+          .join(' ')
+          .toLowerCase();
+
+        // Calculer le score en fonction du nombre de mots-clés trouvés
+        let score = 0;
+        keywords.forEach((keyword) => {
+          if (searchText.includes(keyword.toLowerCase())) {
+            score += 1;
+          }
+        });
+
+        return {
+          id: query.id,
+          question: query.questions[0], // Prendre la première question comme exemple
+          sql: query.sql,
+          description: query.description,
+          parameters: query.parameters,
+          similarity: 1 - score / Math.max(keywords.length, 1), // Convertir en distance (plus petit = meilleur)
+          score: score,
+        };
+      });
+
+      // Filtrer les requêtes qui ont au moins un mot-clé correspondant
+      const matchingQueries = scoredQueries
+        .filter((q) => q.score > 0)
+        .sort((a, b) => a.similarity - b.similarity) // Trier par similarité (croissante)
+        .slice(0, limit);
+
+      this.logger.log(
+        `Requêtes trouvées par mots-clés: ${matchingQueries.length}`,
+      );
+
+      return matchingQueries;
+    } catch (error) {
+      this.logger.error(
+        `Erreur lors de la recherche par mots-clés: ${error.message}`,
+      );
+      return [];
+    }
+  }
+
+  /**
+   * Extrait les mots-clés pertinents d'une question
+   * @param text Texte de la question
+   * @returns Liste des mots-clés
+   */
+  private extractKeywords(text: string): string[] {
+    // Liste de mots à ignorer (stopwords en français)
+    const stopwords = [
+      'le',
+      'la',
+      'les',
+      'un',
+      'une',
+      'des',
+      'du',
+      'de',
+      'a',
+      'à',
+      'au',
+      'aux',
+      'et',
+      'ou',
+      'que',
+      'qui',
+      'quoi',
+      'comment',
+      'quel',
+      'quelle',
+      'quels',
+      'quelles',
+      'ce',
+      'cette',
+      'ces',
+      'mon',
+      'ma',
+      'mes',
+      'ton',
+      'ta',
+      'tes',
+      'son',
+      'sa',
+      'ses',
+      'pour',
+      'par',
+      'avec',
+      'sans',
+      'dans',
+      'sur',
+      'sous',
+      'entre',
+      'vers',
+      'chez',
+      'est',
+      'sont',
+      'suis',
+      'es',
+      'sommes',
+      'êtes',
+      'être',
+      'avoir',
+      'ai',
+      'as',
+      'avons',
+      'avez',
+      'ont',
+      'je',
+      'tu',
+      'il',
+      'elle',
+      'nous',
+      'vous',
+      'ils',
+      'elles',
+    ];
+
+    // Normaliser et découper le texte en mots
+    const normalizedText = text
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '') // Supprimer les accents
+      .replace(/[.,/#!$%&*;:{}=\-_`~()]/g, ' '); // Supprimer la ponctuation, correction des caractères d'échappement inutiles
+
+    const words = normalizedText.split(/\s+/).filter((w) => w.length > 2);
+
+    // Filtrer les mots vides et conserver les mots significatifs
+    return words.filter((word) => !stopwords.includes(word));
+  }
 }

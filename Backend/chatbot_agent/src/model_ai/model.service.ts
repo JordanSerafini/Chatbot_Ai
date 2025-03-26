@@ -20,16 +20,16 @@ interface RagResponse {
   querySelected: {
     sql: string;
     description: string;
-  question: string;
+    question: string;
     distance: number;
     parameters?: any[];
   };
   otherQueries: {
-  sql: string;
-  description: string;
+    sql: string;
+    description: string;
     question: string;
-  distance: number;
-  parameters?: any[];
+    distance: number;
+    parameters?: any[];
   }[];
 }
 
@@ -66,19 +66,19 @@ export class ModelService {
   private async checkLmStudioAvailability(): Promise<void> {
     const lmStudioUrl = this.getLmStudioUrl();
     this.logger.log(`Checking LM Studio availability at ${lmStudioUrl}/models`);
-    
+
     // Liste des URLs à essayer en cas d'échec
     const fallbackUrls = [
-      lmStudioUrl, 
+      lmStudioUrl,
       'http://host.docker.internal:1234/v1',
       'http://172.17.0.1:1234/v1',
       'http://localhost:1234/v1',
-      'http://127.0.0.1:1234/v1'
+      'http://127.0.0.1:1234/v1',
     ];
-    
+
     // Dédupliquer les URLs
     const uniqueUrls = [...new Set(fallbackUrls)];
-    
+
     // Essayer chaque URL
     let lastError: any = null;
     for (const url of uniqueUrls) {
@@ -86,24 +86,32 @@ export class ModelService {
         this.logger.log(`Trying to connect to LM Studio at ${url}/models`);
         await axios.get(`${url}/models`, { timeout: 5000 });
         this.logger.log(`Successfully connected to LM Studio API at ${url}`);
-        
+
         // Si la connexion réussit avec une URL différente, mettre à jour l'URL dans l'environnement
         if (url !== lmStudioUrl) {
-          this.logger.log(`Updating LM Studio URL from ${lmStudioUrl} to ${url}`);
+          this.logger.log(
+            `Updating LM Studio URL from ${lmStudioUrl} to ${url}`,
+          );
           this.configService.set('LM_STUDIO_URL', url);
         }
-        
+
         return; // Sortir de la fonction si une connexion réussit
       } catch (error) {
-        this.logger.warn(`Failed to connect to LM Studio API at ${url}: ${error.message}`);
+        this.logger.warn(
+          `Failed to connect to LM Studio API at ${url}: ${error.message}`,
+        );
         lastError = error;
       }
     }
-    
+
     // Si toutes les tentatives échouent, journaliser l'erreur
     if (lastError) {
-      this.logger.error(`Failed to connect to LM Studio API: ${lastError.message}`);
-      this.logger.error(`Error details: ${JSON.stringify(lastError.code || 'No error code')}`);
+      this.logger.error(
+        `Failed to connect to LM Studio API: ${lastError.message}`,
+      );
+      this.logger.error(
+        `Error details: ${JSON.stringify(lastError.code || 'No error code')}`,
+      );
       this.logger.error(
         'Make sure LM Studio is running with API server enabled on http://localhost:1234',
       );
@@ -280,7 +288,7 @@ export class ModelService {
       }
 
       // 2. Select best match using LM Studio
-      const bestMatch = this.selectBestMatch(question, similarQuestions);
+      const bestMatch = await this.selectBestMatch(question, similarQuestions);
       this.logger.log(`Selected best match: ${bestMatch.question}`);
 
       // 3. Extraire et remplacer les paramètres dans la requête SQL
@@ -698,21 +706,95 @@ export class ModelService {
     return Math.max(0, score); // Empêcher les scores négatifs
   }
 
-  private selectBestMatch(
+  private async selectBestMatch(
     question: string,
     options: RagQuestion[],
-  ): RagQuestion {
+  ): Promise<RagQuestion> {
     try {
-      this.logger.log(`Sélection directe avec distance pour la question: "${question}"`);
-      
-      // Trier les options par distance (la plus petite distance en premier)
-      const sortedOptions = [...options].sort((a, b) => a.distance - b.distance);
-      
-      // Prendre l'option avec la plus petite distance
+      this.logger.log(
+        `Sélection via LM Studio pour la question: "${question}"`,
+      );
+
+      // Préparer le prompt avec toutes les options pour que LM Studio choisisse
+      let optionsText = '';
+      options.forEach((option, index) => {
+        optionsText += `Option ${index + 1}:
+- Question: ${option.question}
+- Description: ${option.metadata.description}
+- SQL: ${option.metadata.sql}
+- Distance: ${option.distance}
+
+`;
+      });
+
+      const prompt = `
+Tu es un expert en SQL qui doit sélectionner la requête SQL la plus pertinente pour répondre à une question.
+         
+Question de l'utilisateur: "${question}"
+
+Voici des options de requêtes SQL existantes:
+${optionsText}
+
+Analysez la question et les options de requêtes SQL disponibles. 
+Pour chaque option, évaluez si elle répond à la question posée, en tenant compte:
+1. De la sémantique de la question (le sens des mots)
+2. Des tables et colonnes référencées dans la requête SQL
+3. Des conditions et filtres appliqués
+4. De la pertinence globale pour répondre exactement à ce qui est demandé
+
+Choisissez l'option la plus pertinente et retournez uniquement son numéro (1, 2, 3, 4, etc.).
+Répondez uniquement avec le numéro, sans autre texte ni explication.`;
+
+      try {
+        // Envoyer le prompt à LM Studio
+        const response = await axios.post(
+          `${this.getLmStudioUrl()}/completions`,
+          {
+            prompt,
+            max_tokens: 10,
+            temperature: 0.1,
+            top_p: 0.9,
+            frequency_penalty: 0.0,
+            stop: ['\n'],
+          },
+          { timeout: 10000 },
+        );
+
+        // Extraire le numéro de l'option choisie
+        const generatedText = response.data.choices[0].text.trim();
+        this.logger.log(`Réponse de LM Studio: "${generatedText}"`);
+
+        const match = generatedText.match(/\d+/);
+
+        if (match) {
+          const selectedIndex = parseInt(match[0], 10) - 1;
+          if (selectedIndex >= 0 && selectedIndex < options.length) {
+            const selectedOption = options[selectedIndex];
+            this.logger.log(
+              `Option sélectionnée par LM Studio: "${selectedOption.question}" (distance: ${selectedOption.distance})`,
+            );
+            return selectedOption;
+          }
+        }
+
+        this.logger.warn(
+          `LM Studio n'a pas retourné de numéro valide: "${generatedText}". Utilisation de la méthode par distance.`,
+        );
+      } catch (llmError) {
+        this.logger.error(
+          `Erreur lors de l'appel à LM Studio: ${llmError.message}. Utilisation de la méthode par distance.`,
+        );
+      }
+
+      // Fallback: Trier par distance si l'appel à LM Studio échoue
+      const sortedOptions = [...options].sort(
+        (a, b) => a.distance - b.distance,
+      );
       const bestMatch = sortedOptions[0];
-      
-      this.logger.log(`Option sélectionnée par distance: "${bestMatch.question}" (distance: ${bestMatch.distance})`);
-      
+      this.logger.log(
+        `Option sélectionnée par fallback distance: "${bestMatch.question}" (distance: ${bestMatch.distance})`,
+      );
+
       return bestMatch;
     } catch (error) {
       this.logger.error(`Erreur lors de la sélection: ${error.message}`);
@@ -1139,35 +1221,39 @@ Ta réponse DOIT commencer directement par le fait principal, sans phrase d'intr
     return cleaned.trim();
   }
 
-  async testLmStudioConnection(): Promise<{ 
-    success: boolean; 
-    message: string; 
+  async testLmStudioConnection(): Promise<{
+    success: boolean;
+    message: string;
     models?: any;
     error?: any;
   }> {
     try {
       const lmStudioUrl = this.getLmStudioUrl();
       this.logger.log(`Testing LM Studio connection at ${lmStudioUrl}/models`);
-      const response = await axios.get(`${lmStudioUrl}/models`, { timeout: 5000 });
+      const response = await axios.get(`${lmStudioUrl}/models`, {
+        timeout: 5000,
+      });
       this.logger.log('Successfully connected to LM Studio API');
-      return { 
-        success: true, 
+      return {
+        success: true,
         message: `Connected to LM Studio at ${lmStudioUrl}`,
-        models: response.data
+        models: response.data,
       };
     } catch (error) {
       this.logger.error(`Failed to connect to LM Studio API: ${error.message}`);
-      this.logger.error(`Error details: ${JSON.stringify(error.code || 'No error code')}`);
+      this.logger.error(
+        `Error details: ${JSON.stringify(error.code || 'No error code')}`,
+      );
       return {
         success: false,
         message: `Failed to connect to LM Studio: ${error.message}`,
-        error: error.code
+        error: error.code,
       };
     }
   }
 
-  async testRagConnection(): Promise<{ 
-    success: boolean; 
+  async testRagConnection(): Promise<{
+    success: boolean;
     message: string;
     health?: any;
     error?: any;
@@ -1177,17 +1263,17 @@ Ta réponse DOIT commencer directement par le fait principal, sans phrase d'intr
       this.logger.log(`Testing RAG connection at ${ragUrl}/health`);
       const response = await axios.get(`${ragUrl}/health`, { timeout: 5000 });
       this.logger.log('Successfully connected to RAG service');
-      return { 
-        success: true, 
+      return {
+        success: true,
         message: `Connected to RAG service at ${ragUrl}`,
-        health: response.data
+        health: response.data,
       };
     } catch (error) {
       this.logger.error(`Failed to connect to RAG service: ${error.message}`);
       return {
         success: false,
         message: `Failed to connect to RAG service: ${error.message}`,
-        error: error.code
+        error: error.code,
       };
     }
   }
