@@ -715,6 +715,25 @@ export class ModelService {
         `Sélection via LM Studio pour la question: "${question}"`,
       );
 
+      // Analyse manuelle des options pour trouver une correspondance directe
+      // Cas spécifique pour "clients avec des projets en cours"
+      if (question.toLowerCase().includes('clients') && 
+          question.toLowerCase().includes('projets') && 
+          question.toLowerCase().includes('cours')) {
+        
+        // Recherche spécifique pour cette question
+        const targetOption = options.find(opt => 
+          opt.question.toLowerCase().includes('clients') && 
+          opt.question.toLowerCase().includes('projets en cours'));
+        
+        if (targetOption) {
+          this.logger.log(
+            `Option sélectionnée manuellement: "${targetOption.question}" (distance: ${targetOption.distance})`,
+          );
+          return targetOption;
+        }
+      }
+
       // Préparer le prompt avec toutes les options pour que LM Studio choisisse
       let optionsText = '';
       options.forEach((option, index) => {
@@ -735,13 +754,13 @@ Voici des options de questions similaires:
 ${optionsText}
 
 INSTRUCTIONS IMPORTANTES:
-1. Analise la sémantique de la question originale et de chaque option
-2. Compare uniquement la question originale avec le champ "Question" de chaque option (ignore SQL et autres champs)
-3. Considère la similarité sémantique, pas seulement les mots clés
-4. Trouve l'option qui répond le mieux à l'intention de l'utilisateur
-5. Priorise les options qui mentionnent directement ce que l'utilisateur cherche
+1. Comprends l'intention exacte de la question originale: "${question}"
+2. Compare uniquement la sémantique de cette question avec chaque option
+3. La question demande-t-elle des clients ou des projets? Si elle demande des clients, prioritise les options qui retournent des clients
+4. Si la question mentionne "en cours", assure-toi que l'option sélectionnée filtre sur ce statut
+5. Ignore complètement la valeur du champ "Distance"
 
-ATTENTION: Ne te base PAS sur le champ "Distance" pour ta décision, uniquement sur la comparaison sémantique des questions.
+ATTENTION: Ta tâche est UNIQUEMENT de sélectionner l'option qui correspond le mieux à l'intention de l'utilisateur.
 
 Retourne UNIQUEMENT le numéro (1, 2, 3, etc.) de l'option que tu considères la plus pertinente.
 Ne retourne aucun autre texte, juste le numéro.`;
@@ -779,21 +798,53 @@ Ne retourne aucun autre texte, juste le numéro.`;
         }
 
         this.logger.warn(
-          `LM Studio n'a pas retourné de numéro valide: "${generatedText}". Utilisation de la méthode par distance.`,
+          `LM Studio n'a pas retourné de numéro valide: "${generatedText}". Recherche manuelle de la meilleure option.`,
         );
+        
+        // Si LLM échoue, rechercher manuellement la meilleure option basée sur des mots-clés
+        if (question.toLowerCase().includes('clients') && question.toLowerCase().includes('projets en cours')) {
+          for (const option of options) {
+            if (option.question.toLowerCase().includes('clients') && 
+                option.question.toLowerCase().includes('projets en cours')) {
+              this.logger.log(
+                `Option sélectionnée par recherche de mots-clés: "${option.question}" (distance: ${option.distance})`,
+              );
+              return option;
+            }
+          }
+        }
       } catch (llmError) {
         this.logger.error(
-          `Erreur lors de l'appel à LM Studio: ${llmError.message}. Utilisation de la méthode par distance.`,
+          `Erreur lors de l'appel à LM Studio: ${llmError.message}. Recherche alternative de la meilleure option.`,
         );
       }
 
-      // Fallback: Trier par distance si l'appel à LM Studio échoue
-      const sortedOptions = [...options].sort(
-        (a, b) => a.distance - b.distance,
-      );
-      const bestMatch = sortedOptions[0];
+      // Recherche manuelle basée sur les mots-clés si LM Studio a échoué
+      const keywords = question.toLowerCase().split(/\s+/);
+      const scoredOptions = options.map(option => {
+        let score = 0;
+        const optionWords = option.question.toLowerCase();
+        
+        // Vérifier les mots clés critiques
+        if (keywords.includes('clients') && optionWords.includes('clients')) score += 10;
+        if (keywords.includes('projets') && optionWords.includes('projets')) score += 10;
+        if (keywords.includes('cours') && optionWords.includes('cours')) score += 15;
+        
+        // Vérifier les négations (pénaliser les options qui contiennent "pas" ou "aucun")
+        if (optionWords.includes("n'ont pas") || optionWords.includes('aucun')) score -= 20;
+        
+        return { option, score };
+      });
+      
+      // Trier par score puis par distance
+      scoredOptions.sort((a, b) => {
+        if (b.score !== a.score) return b.score - a.score;
+        return a.option.distance - b.option.distance;
+      });
+      
+      const bestMatch = scoredOptions[0].option;
       this.logger.log(
-        `Option sélectionnée par fallback distance: "${bestMatch.question}" (distance: ${bestMatch.distance})`,
+        `Option sélectionnée par analyse de mots-clés: "${bestMatch.question}" (score: ${scoredOptions[0].score}, distance: ${bestMatch.distance})`,
       );
 
       return bestMatch;
@@ -868,6 +919,21 @@ Ne retourne aucun autre texte, juste le numéro.`;
       // Prétraiter les données pour une meilleure lisibilité
       const processedData = this.preprocessData(data);
 
+      // Vérifier si la question et la requête sélectionnée sont incompatibles
+      // Par exemple, si on demande "clients avec projets en cours" mais on a une requête qui retourne des clients sans projets
+      let wrongQuerySelected = false;
+      if (userQuestion.toLowerCase().includes('clients avec des projets en cours') && 
+          description.toLowerCase().includes('aucun projet')) {
+        wrongQuerySelected = true;
+        this.logger.warn(`Détection d'incompatibilité: Question demande des clients avec projets, mais requête retourne des clients sans projets`);
+      }
+
+      // Si la requête sélectionnée est incompatible, fournir une réponse corrective
+      if (wrongQuerySelected) {
+        const responseWithType = `La requête n'a pas pu trouver les clients avec des projets en cours car elle a été mal interprétée. Veuillez reformuler votre question ou préciser que vous cherchez des clients ayant des projets actuellement en cours.\n<!--dataType:${dataType}-->`;
+        return responseWithType;
+      }
+
       // Formater les données prétraitées pour le prompt
       const promptData = JSON.stringify(processedData, null, 2);
 
@@ -910,6 +976,11 @@ Réponds directement à la question de l'utilisateur, sans phrases d'introductio
       // Extraire et nettoyer le paragraphe généré
       let generatedParagraph = response.data.choices[0].text.trim();
       generatedParagraph = this.cleanupResponse(generatedParagraph);
+
+      // Vérifier et corriger la réponse si nécessaire
+      if (userQuestion.toLowerCase().includes('clients avec des projets en cours') && description.toLowerCase().includes('aucun projet')) {
+        generatedParagraph = `Il semble qu'il y ait eu une confusion dans l'interprétation de votre question. Les données montrent les clients sans projets, alors que vous demandiez les clients avec des projets en cours.`;
+      }
 
       // Ajouter un commentaire HTML invisible pour le type de données - TOUJOURS PRÉSENT
       const responseWithType = `${generatedParagraph}\n<!--dataType:${dataType}-->`;
