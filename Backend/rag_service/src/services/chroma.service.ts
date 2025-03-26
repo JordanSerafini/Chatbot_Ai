@@ -278,27 +278,22 @@ export class ChromaService implements OnModuleInit {
 
   async deleteCollection() {
     try {
+      this.logger.log(`Tentative de suppression de la collection ${this.COLLECTION_NAME}`);
+      // Vérifier si la collection existe
       const collections = await this.client.listCollections();
-
       if (collections.includes(this.COLLECTION_NAME)) {
         await this.client.deleteCollection({
           name: this.COLLECTION_NAME,
         });
-        this.logger.log(
-          `Collection ${this.COLLECTION_NAME} supprimée avec succès`,
-        );
-        // Réinitialiser la référence de collection
+        this.logger.log(`Collection ${this.COLLECTION_NAME} supprimée avec succès`);
         this.collection = undefined;
+        return true;
       } else {
-        this.logger.warn(
-          `Collection ${this.COLLECTION_NAME} introuvable, rien à supprimer`,
-        );
+        this.logger.log(`Collection ${this.COLLECTION_NAME} n'existe pas, rien à supprimer`);
+        return false;
       }
     } catch (error) {
-      this.logger.error(
-        'Erreur lors de la suppression de la collection:',
-        error,
-      );
+      this.logger.error(`Erreur lors de la suppression de la collection:`, error);
       throw error;
     }
   }

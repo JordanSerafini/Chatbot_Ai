@@ -1,6 +1,6 @@
 import { NestFactory } from '@nestjs/core';
-import { AppModule } from '../../app.module';
-import { ChromaService } from '../../services/chroma.service';
+import { AppModule } from '../app.module';
+import { ChromaService } from '../services/chroma.service';
 import { Logger } from '@nestjs/common';
 import axios from 'axios';
 
