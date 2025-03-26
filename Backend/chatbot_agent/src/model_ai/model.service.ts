@@ -712,77 +712,31 @@ export class ModelService {
   ): Promise<RagQuestion> {
     try {
       this.logger.log(`Sélection pour la question: "${question}"`);
-      
-      // Normaliser la question de l'utilisateur
+
+      // Prétraitement pour normalisation
       const normalizedQuestion = question
         .toLowerCase()
         .normalize('NFD')
         .replace(/[\u0300-\u036f]/g, '');
-      
-      // Cas spécifiques fréquents avec correspondance directe
-      
-      // 1. Clients avec projets en cours
-      if (
-        normalizedQuestion.includes('client') && 
-        normalizedQuestion.includes('projet') && 
-        normalizedQuestion.includes('cours')
-      ) {
-        const clientsProjetsCours = options.find((opt) => 
-          opt.question.toLowerCase().includes('clients') && 
-          opt.question.toLowerCase().includes('projets en cours')
-        );
-        
-        if (clientsProjetsCours) {
-          this.logger.log(
-            `Option sélectionnée par correspondance directe: "${clientsProjetsCours.question}"`,
-          );
-          return clientsProjetsCours;
-        }
-      }
-      
-      // 2. Qui travaille semaine prochaine
-      if (
-        (normalizedQuestion.includes('qui') || normalizedQuestion.includes('personne')) && 
-        normalizedQuestion.includes('travail') && 
-        normalizedQuestion.includes('semaine') && 
-        (normalizedQuestion.includes('prochaine') || normalizedQuestion.includes('suivante'))
-      ) {
-        const travailleSemaine = options.find((opt) => 
-          opt.question.toLowerCase().includes('travaille') && 
-          opt.question.toLowerCase().includes('semaine prochaine')
-        );
-        
-        if (travailleSemaine) {
-          this.logger.log(
-            `Option sélectionnée par correspondance directe: "${travailleSemaine.question}"`,
-          );
-          return travailleSemaine;
-        }
-      }
 
-      // Préparer le prompt avec toutes les options
+      // Préparer le prompt avec les options (uniquement les questions, sans autres détails)
       let optionsText = '';
       options.forEach((option, index) => {
         optionsText += `Option ${index + 1}: "${option.question}"\n`;
       });
 
+      // Prompt très simple et direct pour LM Studio
       const prompt = `
-Tu dois sélectionner la question la plus similaire sémantiquement à la question originale.
-
 Question originale: "${question}"
 
-Options disponibles:
+Options:
 ${optionsText}
 
-INSTRUCTIONS CLAIRES:
-1. Analyse uniquement la SIMILARITÉ SÉMANTIQUE entre la question originale et chaque option
-2. Ignore complètement la syntaxe, concentre-toi sur le SENS et l'INTENTION
-3. Ne te base pas sur des mots-clés isolés, mais sur la signification globale
-
-Retourne UNIQUEMENT le numéro de l'option la plus similaire sémantiquement (1, 2, 3, etc.), sans aucun autre texte.`;
+INSTRUCTIONS: Compare la question originale avec chaque option. Choisis l'option qui est sémantiquement la plus proche.
+RETOURNE UNIQUEMENT LE NUMÉRO de l'option choisie (1, 2, 3, etc.).`;
 
       try {
-        // Envoyer le prompt à LM Studio
+        // Envoyer le prompt à LM Studio avec des paramètres optimisés pour une réponse courte
         const response = await axios.post(
           `${this.getLmStudioUrl()}/completions`,
           {
@@ -791,7 +745,7 @@ Retourne UNIQUEMENT le numéro de l'option la plus similaire sémantiquement (1,
             temperature: 0.1,
             top_p: 0.95,
             frequency_penalty: 0.0,
-            stop: ['\n'],
+            stop: ['\n', ' '],
           },
           { timeout: 10000 },
         );
@@ -800,10 +754,11 @@ Retourne UNIQUEMENT le numéro de l'option la plus similaire sémantiquement (1,
         const generatedText = response.data.choices[0].text.trim();
         this.logger.log(`Réponse de LM Studio: "${generatedText}"`);
 
-        const match = generatedText.match(/\d+/);
-
-        if (match) {
-          const selectedIndex = parseInt(match[0], 10) - 1;
+        // Extraction stricte d'un numéro
+        const numericResponse = generatedText.replace(/\D/g, '');
+        
+        if (numericResponse && numericResponse.length > 0) {
+          const selectedIndex = parseInt(numericResponse, 10) - 1;
           if (selectedIndex >= 0 && selectedIndex < options.length) {
             const selectedOption = options[selectedIndex];
             this.logger.log(
@@ -814,7 +769,7 @@ Retourne UNIQUEMENT le numéro de l'option la plus similaire sémantiquement (1,
         }
 
         this.logger.warn(
-          `LM Studio n'a pas retourné de numéro valide. Utilisation de la méthode par score.`,
+          `LM Studio n'a pas retourné de numéro valide (réponse: "${generatedText}"). Utilisation de la méthode par score.`,
         );
       } catch (llmError) {
         this.logger.error(
@@ -828,58 +783,64 @@ Retourne UNIQUEMENT le numéro de l'option la plus similaire sémantiquement (1,
           .toLowerCase()
           .normalize('NFD')
           .replace(/[\u0300-\u036f]/g, '');
-        
+
         let score = 0;
-        
+
         // Score de base pour les mots communs
         const questionWords = normalizedQuestion.split(/\s+/);
         const optionWords = normalizedOptionQuestion.split(/\s+/);
-        
-        // Mots exacts en commun
-        const commonWords = questionWords.filter(word => 
-          optionWords.includes(word) && word.length > 2
+
+        // Mots exacts en commun (mots significatifs)
+        const commonWords = questionWords.filter(
+          (word) => optionWords.includes(word) && word.length > 2,
         );
         score += commonWords.length * 5;
-        
-        // Mots-clés importants
+
+        // Mots-clés importants avec leurs poids
         const keywordMap = {
-          'client': 30,
-          'projet': 25,
-          'cours': 20,
-          'travail': 30,
-          'travaille': 30,
-          'qui': 15,
-          'semaine': 15,
-          'prochaine': 20,
-          'facture': 30,
-          'devis': 30
+          client: 30,
+          projet: 25,
+          cours: 20,
+          travail: 30,
+          travaille: 30,
+          qui: 15,
+          semaine: 15,
+          prochaine: 20,
+          facture: 30,
+          devis: 30,
         };
-        
+
+        // Appliquer les bonus pour chaque mot-clé présent dans les deux textes
         Object.entries(keywordMap).forEach(([keyword, value]) => {
-          if (normalizedQuestion.includes(keyword) && normalizedOptionQuestion.includes(keyword)) {
+          if (
+            normalizedQuestion.includes(keyword) &&
+            normalizedOptionQuestion.includes(keyword)
+          ) {
             score += value;
           }
         });
-        
-        // Pénalités pour les négations
+
+        // Pénalités pour les négations et contradictions sémantiques
         if (
-          normalizedQuestion.includes('avec') && normalizedOptionQuestion.includes('sans') ||
-          normalizedQuestion.includes('sans') && normalizedOptionQuestion.includes('avec') ||
-          normalizedOptionQuestion.includes("n'ont pas") || 
+          (normalizedQuestion.includes('avec') &&
+            normalizedOptionQuestion.includes('sans')) ||
+          (normalizedQuestion.includes('sans') &&
+            normalizedOptionQuestion.includes('avec')) ||
+          normalizedOptionQuestion.includes("n'ont pas") ||
           normalizedOptionQuestion.includes('aucun')
         ) {
           score -= 50;
         }
-        
+
         return { option, score };
       });
-      
+
       // Trier par score puis par distance
       scoredOptions.sort((a, b) => {
         if (b.score !== a.score) return b.score - a.score;
         return a.option.distance - b.option.distance;
       });
-      
+
       const bestMatch = scoredOptions[0].option;
       this.logger.log(
         `Option sélectionnée par score: "${bestMatch.question}" (score: ${scoredOptions[0].score})`,
@@ -960,10 +921,16 @@ Retourne UNIQUEMENT le numéro de l'option la plus similaire sémantiquement (1,
       // Vérifier si la question et la requête sélectionnée sont incompatibles
       // Par exemple, si on demande "clients avec projets en cours" mais on a une requête qui retourne des clients sans projets
       let wrongQuerySelected = false;
-      if (userQuestion.toLowerCase().includes('clients avec des projets en cours') && 
-          description.toLowerCase().includes('aucun projet')) {
+      if (
+        userQuestion
+          .toLowerCase()
+          .includes('clients avec des projets en cours') &&
+        description.toLowerCase().includes('aucun projet')
+      ) {
         wrongQuerySelected = true;
-        this.logger.warn(`Détection d'incompatibilité: Question demande des clients avec projets, mais requête retourne des clients sans projets`);
+        this.logger.warn(
+          `Détection d'incompatibilité: Question demande des clients avec projets, mais requête retourne des clients sans projets`,
+        );
       }
 
       // Si la requête sélectionnée est incompatible, fournir une réponse corrective
@@ -1016,7 +983,12 @@ Réponds directement à la question de l'utilisateur, sans phrases d'introductio
       generatedParagraph = this.cleanupResponse(generatedParagraph);
 
       // Vérifier et corriger la réponse si nécessaire
-      if (userQuestion.toLowerCase().includes('clients avec des projets en cours') && description.toLowerCase().includes('aucun projet')) {
+      if (
+        userQuestion
+          .toLowerCase()
+          .includes('clients avec des projets en cours') &&
+        description.toLowerCase().includes('aucun projet')
+      ) {
         generatedParagraph = `Il semble qu'il y ait eu une confusion dans l'interprétation de votre question. Les données montrent les clients sans projets, alors que vous demandiez les clients avec des projets en cours.`;
       }
 
