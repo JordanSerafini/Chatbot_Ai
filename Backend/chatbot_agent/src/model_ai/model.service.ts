@@ -711,59 +711,75 @@ export class ModelService {
     options: RagQuestion[],
   ): Promise<RagQuestion> {
     try {
-      this.logger.log(
-        `Sélection via LM Studio pour la question: "${question}"`,
-      );
-
-      // Analyse manuelle des options pour trouver une correspondance directe
-      // Cas spécifique pour "clients avec des projets en cours"
-      if (question.toLowerCase().includes('clients') && 
-          question.toLowerCase().includes('projets') && 
-          question.toLowerCase().includes('cours')) {
-        
-        // Recherche spécifique pour cette question
-        const targetOption = options.find(opt => 
+      this.logger.log(`Sélection pour la question: "${question}"`);
+      
+      // Normaliser la question de l'utilisateur
+      const normalizedQuestion = question
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '');
+      
+      // Cas spécifiques fréquents avec correspondance directe
+      
+      // 1. Clients avec projets en cours
+      if (
+        normalizedQuestion.includes('client') && 
+        normalizedQuestion.includes('projet') && 
+        normalizedQuestion.includes('cours')
+      ) {
+        const clientsProjetsCours = options.find((opt) => 
           opt.question.toLowerCase().includes('clients') && 
-          opt.question.toLowerCase().includes('projets en cours'));
+          opt.question.toLowerCase().includes('projets en cours')
+        );
         
-        if (targetOption) {
+        if (clientsProjetsCours) {
           this.logger.log(
-            `Option sélectionnée manuellement: "${targetOption.question}" (distance: ${targetOption.distance})`,
+            `Option sélectionnée par correspondance directe: "${clientsProjetsCours.question}"`,
           );
-          return targetOption;
+          return clientsProjetsCours;
+        }
+      }
+      
+      // 2. Qui travaille semaine prochaine
+      if (
+        (normalizedQuestion.includes('qui') || normalizedQuestion.includes('personne')) && 
+        normalizedQuestion.includes('travail') && 
+        normalizedQuestion.includes('semaine') && 
+        (normalizedQuestion.includes('prochaine') || normalizedQuestion.includes('suivante'))
+      ) {
+        const travailleSemaine = options.find((opt) => 
+          opt.question.toLowerCase().includes('travaille') && 
+          opt.question.toLowerCase().includes('semaine prochaine')
+        );
+        
+        if (travailleSemaine) {
+          this.logger.log(
+            `Option sélectionnée par correspondance directe: "${travailleSemaine.question}"`,
+          );
+          return travailleSemaine;
         }
       }
 
-      // Préparer le prompt avec toutes les options pour que LM Studio choisisse
+      // Préparer le prompt avec toutes les options
       let optionsText = '';
       options.forEach((option, index) => {
-        optionsText += `Option ${index + 1}:
-- Question: ${option.question}
-- Description: ${option.metadata?.description || 'Pas de description'}
-- Distance: ${option.distance}
-
-`;
+        optionsText += `Option ${index + 1}: "${option.question}"\n`;
       });
 
       const prompt = `
-Tu es un expert en compréhension de langage naturel qui doit sélectionner la question la plus pertinente.
+Tu dois sélectionner la question la plus similaire sémantiquement à la question originale.
 
-Question originale de l'utilisateur: "${question}"
+Question originale: "${question}"
 
-Voici des options de questions similaires:
+Options disponibles:
 ${optionsText}
 
-INSTRUCTIONS IMPORTANTES:
-1. Comprends l'intention exacte de la question originale: "${question}"
-2. Compare uniquement la sémantique de cette question avec chaque option
-3. La question demande-t-elle des clients ou des projets? Si elle demande des clients, prioritise les options qui retournent des clients
-4. Si la question mentionne "en cours", assure-toi que l'option sélectionnée filtre sur ce statut
-5. Ignore complètement la valeur du champ "Distance"
+INSTRUCTIONS CLAIRES:
+1. Analyse uniquement la SIMILARITÉ SÉMANTIQUE entre la question originale et chaque option
+2. Ignore complètement la syntaxe, concentre-toi sur le SENS et l'INTENTION
+3. Ne te base pas sur des mots-clés isolés, mais sur la signification globale
 
-ATTENTION: Ta tâche est UNIQUEMENT de sélectionner l'option qui correspond le mieux à l'intention de l'utilisateur.
-
-Retourne UNIQUEMENT le numéro (1, 2, 3, etc.) de l'option que tu considères la plus pertinente.
-Ne retourne aucun autre texte, juste le numéro.`;
+Retourne UNIQUEMENT le numéro de l'option la plus similaire sémantiquement (1, 2, 3, etc.), sans aucun autre texte.`;
 
       try {
         // Envoyer le prompt à LM Studio
@@ -773,7 +789,7 @@ Ne retourne aucun autre texte, juste le numéro.`;
             prompt,
             max_tokens: 10,
             temperature: 0.1,
-            top_p: 0.9,
+            top_p: 0.95,
             frequency_penalty: 0.0,
             stop: ['\n'],
           },
@@ -791,47 +807,69 @@ Ne retourne aucun autre texte, juste le numéro.`;
           if (selectedIndex >= 0 && selectedIndex < options.length) {
             const selectedOption = options[selectedIndex];
             this.logger.log(
-              `Option sélectionnée par LM Studio: "${selectedOption.question}" (distance: ${selectedOption.distance})`,
+              `Option sélectionnée par LM Studio: "${selectedOption.question}"`,
             );
             return selectedOption;
           }
         }
 
         this.logger.warn(
-          `LM Studio n'a pas retourné de numéro valide: "${generatedText}". Recherche manuelle de la meilleure option.`,
+          `LM Studio n'a pas retourné de numéro valide. Utilisation de la méthode par score.`,
         );
-        
-        // Si LLM échoue, rechercher manuellement la meilleure option basée sur des mots-clés
-        if (question.toLowerCase().includes('clients') && question.toLowerCase().includes('projets en cours')) {
-          for (const option of options) {
-            if (option.question.toLowerCase().includes('clients') && 
-                option.question.toLowerCase().includes('projets en cours')) {
-              this.logger.log(
-                `Option sélectionnée par recherche de mots-clés: "${option.question}" (distance: ${option.distance})`,
-              );
-              return option;
-            }
-          }
-        }
       } catch (llmError) {
         this.logger.error(
-          `Erreur lors de l'appel à LM Studio: ${llmError.message}. Recherche alternative de la meilleure option.`,
+          `Erreur lors de l'appel à LM Studio: ${llmError.message}. Utilisation de la méthode par score.`,
         );
       }
 
-      // Recherche manuelle basée sur les mots-clés si LM Studio a échoué
-      const keywords = question.toLowerCase().split(/\s+/);
-      const scoredOptions = options.map(option => {
+      // Méthode par score si LLM échoue
+      const scoredOptions = options.map((option) => {
+        const normalizedOptionQuestion = option.question
+          .toLowerCase()
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '');
+        
         let score = 0;
-        const optionWords = option.question.toLowerCase();
         
-        // Vérifier les mots clés critiques
-        if (keywords.includes('clients') && optionWords.includes('clients')) score += 10;
-        if (keywords.includes('projets') && optionWords.includes('projets')) score += 10;
-        if (keywords.includes('cours') && optionWords.includes('cours')) score += 15;
+        // Score de base pour les mots communs
+        const questionWords = normalizedQuestion.split(/\s+/);
+        const optionWords = normalizedOptionQuestion.split(/\s+/);
         
-        // Vérifier les négations (pénaliser les options qui contiennent "pas" ou "aucun")
-        if (optionWords.includes("n'ont pas") || optionWords.includes('aucun')) score -= 20;
+        // Mots exacts en commun
+        const commonWords = questionWords.filter(word => 
+          optionWords.includes(word) && word.length > 2
+        );
+        score += commonWords.length * 5;
+        
+        // Mots-clés importants
+        const keywordMap = {
+          'client': 30,
+          'projet': 25,
+          'cours': 20,
+          'travail': 30,
+          'travaille': 30,
+          'qui': 15,
+          'semaine': 15,
+          'prochaine': 20,
+          'facture': 30,
+          'devis': 30
+        };
+        
+        Object.entries(keywordMap).forEach(([keyword, value]) => {
+          if (normalizedQuestion.includes(keyword) && normalizedOptionQuestion.includes(keyword)) {
+            score += value;
+          }
+        });
+        
+        // Pénalités pour les négations
+        if (
+          normalizedQuestion.includes('avec') && normalizedOptionQuestion.includes('sans') ||
+          normalizedQuestion.includes('sans') && normalizedOptionQuestion.includes('avec') ||
+          normalizedOptionQuestion.includes("n'ont pas") || 
+          normalizedOptionQuestion.includes('aucun')
+        ) {
+          score -= 50;
+        }
         
         return { option, score };
       });
@@ -844,7 +882,7 @@ Ne retourne aucun autre texte, juste le numéro.`;
       
       const bestMatch = scoredOptions[0].option;
       this.logger.log(
-        `Option sélectionnée par analyse de mots-clés: "${bestMatch.question}" (score: ${scoredOptions[0].score}, distance: ${bestMatch.distance})`,
+        `Option sélectionnée par score: "${bestMatch.question}" (score: ${scoredOptions[0].score})`,
       );
 
       return bestMatch;
