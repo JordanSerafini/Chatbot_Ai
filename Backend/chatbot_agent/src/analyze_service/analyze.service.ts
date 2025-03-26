@@ -2,6 +2,20 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import axios from 'axios';
 
+interface RagQuestion {
+  question: string;
+  metadata: {
+    sql: string;
+    description: string;
+    parameters: {
+      name: string;
+      description: string;
+      default?: string;
+    }[];
+  };
+  distance: number;
+}
+
 @Injectable()
 export class AnalyseService {
   private readonly logger = new Logger('Analyze_Service_Logger');
@@ -16,7 +30,5 @@ export class AnalyseService {
     }
   }
 
-  private ModelQuery(question:string): Promise<string> {
-   
-  }
+  private getSimilarQuestions(question: string): Promise<RagQuestion> {}
 }
