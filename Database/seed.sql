@@ -3,7 +3,6 @@ SET session_replication_role = 'replica';
 
 BEGIN;
 
--- Vérifier et créer les types enums s'ils n'existent pas
 DO $$
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'payment_method') THEN
