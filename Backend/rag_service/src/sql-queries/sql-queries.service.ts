@@ -4,19 +4,25 @@ import {
   Collection,
   GetCollectionParams,
   Metadata,
-  IEmbeddingFunction,
+  DefaultEmbeddingFunction,
 } from 'chromadb';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as crypto from 'crypto';
 import { ConfigService } from '@nestjs/config';
 
-// Fonction d'embedding vide pour satisfaire le typage
-class NoOpEmbeddingFunction implements IEmbeddingFunction {
-  public generate(texts: string[]): Promise<number[][]> {
-    // Retourne un vecteur vide pour chaque texte
-    return Promise.resolve(texts.map(() => []));
-  }
+// Classe pour la gestion des hashes
+interface QueryHash {
+  id: string;
+  hash: string;
+}
+
+// Définir les types pour les métadonnées des requêtes
+interface QueryMetadata {
+  sql: string;
+  description: string;
+  parameters: string;
+  [key: string]: string | number | boolean;
 }
 
 interface QueryData {
@@ -31,16 +37,6 @@ interface JsonData {
   queries: QueryData[];
 }
 
-interface QueryHash {
-  id: string;
-  hash: string;
-}
-
-interface QueryMetadata extends Metadata {
-  sql: string;
-  description: string;
-}
-
 interface HashMetadata extends Metadata {
   hash: string;
 }
@@ -51,7 +47,7 @@ export class SqlQueriesService {
   private readonly client: ChromaClient;
   private readonly COLLECTION_NAME = 'sql_queries';
   private readonly HASH_COLLECTION_NAME = 'query_hashes';
-  private readonly embeddingFunction: IEmbeddingFunction;
+  private readonly embeddingFunction = new DefaultEmbeddingFunction();
   private collection: Collection;
   private hashCollection: Collection;
 
@@ -62,7 +58,6 @@ export class SqlQueriesService {
     this.client = new ChromaClient({
       path: chromaUrl,
     });
-    this.embeddingFunction = new NoOpEmbeddingFunction();
   }
 
   private calculateHash(query: QueryData): string {
@@ -111,7 +106,7 @@ export class SqlQueriesService {
 
   private async checkForUpdates(queryFiles: string[]): Promise<boolean> {
     let hasUpdates = false;
-    const queryDir = path.join(process.cwd(), 'Backend', 'chroma_db', 'query');
+    const queryDir = path.join(process.cwd(), 'query');
     const currentHashes = new Map<string, string>();
 
     // Charger les hashes actuels
@@ -182,12 +177,7 @@ export class SqlQueriesService {
       await this.client.deleteCollection({ name: this.HASH_COLLECTION_NAME });
       await this.initializeCollections();
 
-      const queryDir = path.join(
-        process.cwd(),
-        'Backend',
-        'chroma_db',
-        'query',
-      );
+      const queryDir = path.join(process.cwd(), 'query');
       this.logger.log(`Chargement des requêtes depuis: ${queryDir}`);
 
       let totalQueries = 0;
@@ -210,10 +200,17 @@ export class SqlQueriesService {
 
               query.questions.forEach((question, index) => {
                 documents.push(question);
-                metadatas.push({
+
+                // Convertir les paramètres en chaîne JSON si nécessaire
+                const metadata: QueryMetadata = {
                   sql: query.sql,
                   description: query.description,
-                });
+                  parameters: query.parameters
+                    ? JSON.stringify(query.parameters)
+                    : '[]',
+                };
+
+                metadatas.push(metadata);
                 ids.push(`${query.id}-${queryIndex}-${index}`);
               });
             });
@@ -317,7 +314,7 @@ export class SqlQueriesService {
   private async getOrCreateCollection(): Promise<Collection> {
     try {
       // Simple no-op embedding function
-      const embeddingFunction = new NoOpEmbeddingFunction();
+      const embeddingFunction = this.embeddingFunction;
 
       // Vérifier si la collection existe déjà
       const collections = await this.client.listCollections();
@@ -343,5 +340,256 @@ export class SqlQueriesService {
       );
       throw error;
     }
+  }
+
+  /**
+   * Récupère les métadonnées d'une requête SQL par son ID
+   * @param queryId Identifiant de la requête
+   * @returns Les métadonnées de la requête (sql, description, paramètres)
+   */
+  async getQueryMetadataById(queryId: string): Promise<QueryMetadata | null> {
+    try {
+      this.logger.log(`Recherche de la requête avec l'ID: ${queryId}`);
+
+      // Parcourir les fichiers de requêtes pour trouver celle avec l'ID spécifié
+      const queryDir = path.join(process.cwd(), 'query');
+      const queryFiles = [
+        'clients.query.json',
+        'invoices.query.json',
+        'planning.query.json',
+        'projects.query.json',
+        'quotations.query.json',
+      ];
+
+      for (const file of queryFiles) {
+        try {
+          const filePath = path.join(queryDir, file);
+          const data = await this.loadQueryFile(filePath);
+
+          // Chercher la requête avec l'ID correspondant
+          const query = data.queries.find((q) => q.id === queryId);
+
+          if (query) {
+            this.logger.log(`Requête trouvée dans le fichier ${file}`);
+            return {
+              sql: query.sql,
+              description: query.description,
+              parameters: JSON.stringify(query.parameters || []),
+            };
+          }
+        } catch (err) {
+          this.logger.error(
+            `Erreur lors de la lecture du fichier ${file}:`,
+            err,
+          );
+        }
+      }
+
+      // Si la requête n'est pas trouvée dans les fichiers, rechercher dans ChromaDB
+      const result = await this.hashCollection.get({
+        where: { query_id: queryId },
+        limit: 1,
+      });
+
+      if (
+        result.ids &&
+        result.ids.length > 0 &&
+        result.metadatas &&
+        result.metadatas.length > 0
+      ) {
+        const metadata = result.metadatas[0] as QueryMetadata;
+        this.logger.log(`Requête trouvée dans ChromaDB`);
+        return metadata;
+      }
+
+      this.logger.warn(`Aucune requête trouvée avec l'ID: ${queryId}`);
+      return null;
+    } catch (error) {
+      this.logger.error(
+        `Erreur lors de la récupération de la requête: ${error.message}`,
+      );
+      return null;
+    }
+  }
+
+  /**
+   * Recherche des requêtes SQL en utilisant des mots-clés
+   * @param query Texte de la question utilisateur
+   * @param limit Nombre de résultats à retourner
+   * @returns Liste des requêtes SQL correspondantes
+   */
+  async findQueriesByKeywords(
+    query: string,
+    limit: number = 5,
+  ): Promise<any[]> {
+    try {
+      this.logger.log(`Recherche par mots-clés pour: "${query}"`);
+
+      // Extraire des mots-clés pertinents de la question
+      const keywords = this.extractKeywords(query);
+
+      if (keywords.length === 0) {
+        this.logger.warn(`Aucun mot-clé pertinent trouvé dans: "${query}"`);
+        return [];
+      }
+
+      this.logger.log(`Mots-clés extraits: ${keywords.join(', ')}`);
+
+      // Chargement des fichiers de requêtes
+      const queryDir = path.join(process.cwd(), 'query');
+      const queryFiles = [
+        'clients.query.json',
+        'invoices.query.json',
+        'planning.query.json',
+        'projects.query.json',
+        'quotations.query.json',
+      ];
+
+      let allQueries: QueryData[] = [];
+
+      // Charger toutes les requêtes depuis les fichiers
+      for (const file of queryFiles) {
+        try {
+          const filePath = path.join(queryDir, file);
+          const data = await this.loadQueryFile(filePath);
+          allQueries = [...allQueries, ...data.queries];
+        } catch (error) {
+          this.logger.error(
+            `Erreur lors du chargement du fichier ${file}: ${error.message}`,
+          );
+        }
+      }
+
+      // Calculer les scores de correspondance pour chaque requête
+      const scoredQueries = allQueries.map((query) => {
+        // Créer un texte à partir de toutes les questions et de la description
+        const searchText = [...query.questions, query.description]
+          .join(' ')
+          .toLowerCase();
+
+        // Calculer le score en fonction du nombre de mots-clés trouvés
+        let score = 0;
+        keywords.forEach((keyword) => {
+          if (searchText.includes(keyword.toLowerCase())) {
+            score += 1;
+          }
+        });
+
+        return {
+          id: query.id,
+          question: query.questions[0], // Prendre la première question comme exemple
+          sql: query.sql,
+          description: query.description,
+          parameters: query.parameters,
+          similarity: 1 - score / Math.max(keywords.length, 1), // Convertir en distance (plus petit = meilleur)
+          score: score,
+        };
+      });
+
+      // Filtrer les requêtes qui ont au moins un mot-clé correspondant
+      const matchingQueries = scoredQueries
+        .filter((q) => q.score > 0)
+        .sort((a, b) => a.similarity - b.similarity) // Trier par similarité (croissante)
+        .slice(0, limit);
+
+      this.logger.log(
+        `Requêtes trouvées par mots-clés: ${matchingQueries.length}`,
+      );
+
+      return matchingQueries;
+    } catch (error) {
+      this.logger.error(
+        `Erreur lors de la recherche par mots-clés: ${error.message}`,
+      );
+      return [];
+    }
+  }
+
+  /**
+   * Extrait les mots-clés pertinents d'une question
+   * @param text Texte de la question
+   * @returns Liste des mots-clés
+   */
+  private extractKeywords(text: string): string[] {
+    // Liste de mots à ignorer (stopwords en français)
+    const stopwords = [
+      'le',
+      'la',
+      'les',
+      'un',
+      'une',
+      'des',
+      'du',
+      'de',
+      'a',
+      'à',
+      'au',
+      'aux',
+      'et',
+      'ou',
+      'que',
+      'qui',
+      'quoi',
+      'comment',
+      'quel',
+      'quelle',
+      'quels',
+      'quelles',
+      'ce',
+      'cette',
+      'ces',
+      'mon',
+      'ma',
+      'mes',
+      'ton',
+      'ta',
+      'tes',
+      'son',
+      'sa',
+      'ses',
+      'pour',
+      'par',
+      'avec',
+      'sans',
+      'dans',
+      'sur',
+      'sous',
+      'entre',
+      'vers',
+      'chez',
+      'est',
+      'sont',
+      'suis',
+      'es',
+      'sommes',
+      'êtes',
+      'être',
+      'avoir',
+      'ai',
+      'as',
+      'avons',
+      'avez',
+      'ont',
+      'je',
+      'tu',
+      'il',
+      'elle',
+      'nous',
+      'vous',
+      'ils',
+      'elles',
+    ];
+
+    // Normaliser et découper le texte en mots
+    const normalizedText = text
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '') // Supprimer les accents
+      .replace(/[.,/#!$%&*;:{}=\-_`~()]/g, ' '); // Supprimer la ponctuation, correction des caractères d'échappement inutiles
+
+    const words = normalizedText.split(/\s+/).filter((w) => w.length > 2);
+
+    // Filtrer les mots vides et conserver les mots significatifs
+    return words.filter((word) => !stopwords.includes(word));
   }
 }

@@ -13,6 +13,7 @@ import { RagService } from './rag.service';
 import { SqlQueriesService } from '../sql-queries/sql-queries.service';
 import { ChromaService } from '../services/chroma.service';
 import { SimilarQuestion } from '../interfaces/question.interface';
+import { Logger } from '@nestjs/common';
 
 class QuestionDto {
   question: string;
@@ -21,6 +22,8 @@ class QuestionDto {
 
 @Controller('rag')
 export class RagController {
+  private readonly logger = new Logger(RagController.name);
+
   constructor(
     private readonly ragService: RagService,
     private readonly sqlQueriesService: SqlQueriesService,
@@ -87,7 +90,59 @@ export class RagController {
         throw new BadRequestException('La question est requise');
       }
 
-      // Utiliser la nouvelle méthode processQuestion qui intègre la recherche de questions similaires
+      this.logger.log(`Traitement de la question: "${question}"`);
+
+      // Analyser la question pour détecter des patterns spécifiques
+      const lowerQuestion = question.toLowerCase().trim();
+
+      // Détection pour les questions sur les chantiers de cette année
+      if (
+        /chantier.*(?:cette année|année en cours|cette anné|annee|cet an)/i.test(
+          lowerQuestion,
+        ) ||
+        /(?:cette année|année en cours|cette anné|annee|cet an).*chantier/i.test(
+          lowerQuestion,
+        ) ||
+        /(?:projet|projets).*(?:cette année|année en cours|cette anné|annee|cet an)/i.test(
+          lowerQuestion,
+        ) ||
+        /(?:cette année|année en cours|cette anné|annee|cet an).*(?:projet|projets)/i.test(
+          lowerQuestion,
+        )
+      ) {
+        this.logger.log(
+          `Question détectée comme demande de chantiers pour cette année`,
+        );
+
+        // Forcer l'utilisation de la requête "projects_this_year"
+        const sqlMetadata =
+          await this.sqlQueriesService.getQueryMetadataById(
+            'projects_this_year',
+          );
+
+        if (sqlMetadata) {
+          return {
+            question,
+            finalQuery: sqlMetadata.sql,
+            originalQuery: sqlMetadata.sql,
+            fromStoredQuery: true,
+            storedQueryId: 'projects_this_year',
+            similarity: 0.95,
+            source: 'rag',
+            confidence: 0.95,
+            parameters: [],
+            description: sqlMetadata.description,
+            bestMatch: {
+              queryId: 'projects_this_year',
+              sql: sqlMetadata.sql,
+              description: sqlMetadata.description,
+              similarity: 0.95,
+            },
+          };
+        }
+      }
+
+      // Utiliser la méthode processQuestion qui intègre la recherche de questions similaires
       const result = await this.ragService.processQuestion(question);
 
       return result;
@@ -257,10 +312,67 @@ export class RagController {
   async findSimilarQuestions(
     @Body() questionDto: QuestionDto,
   ): Promise<SimilarQuestion[]> {
-    return await this.chromaService.findSimilarQuestions(
-      questionDto.question,
-      questionDto.nResults || 5,
-    );
+    try {
+      const collections = await this.ragService
+        .getChromaClient()
+        .listCollections();
+      this.logger.log(
+        `Collections disponibles: ${JSON.stringify(collections)}`,
+      );
+      this.logger.log(`Recherche pour la question: "${questionDto.question}"`);
+
+      // Obtenir 5 résultats par recherche sémantique (embedding)
+      const embeddingResults = await this.chromaService.findSimilarQuestions(
+        questionDto.question,
+        5, // Limiter à 5 résultats pour les embeddings
+      );
+
+      // Obtenir 5 résultats par recherche par mots-clés
+      // On utilise une approche de recherche textuelle pour diversifier les résultats
+      const keywordMatches = await this.sqlQueriesService.findQueriesByKeywords(
+        questionDto.question,
+        5, // Limiter à 5 résultats pour les mots-clés
+      );
+
+      // Convertir les résultats de mots-clés au même format que les résultats d'embedding
+      const keywordResults: SimilarQuestion[] = keywordMatches.map((match) => ({
+        question: match.question,
+        metadata: {
+          sql: match.sql,
+          description: match.description,
+          parameters: match.parameters || [],
+        },
+        distance: match.similarity, // Utiliser le score de similarité comme distance
+      }));
+
+      // Combiner les deux ensembles de résultats
+      const combinedResults = [...embeddingResults];
+
+      // Ajouter uniquement les résultats de mots-clés qui ne sont pas déjà présents dans les résultats d'embedding
+      // (éviter les doublons basés sur la requête SQL)
+      for (const keywordResult of keywordResults) {
+        const isDuplicate = combinedResults.some(
+          (r) => r.metadata.sql === keywordResult.metadata.sql,
+        );
+
+        if (!isDuplicate) {
+          combinedResults.push(keywordResult);
+        }
+      }
+
+      // Trier l'ensemble combiné par distance (croissante)
+      combinedResults.sort((a, b) => a.distance - b.distance);
+
+      // Limiter à un maximum de 10 résultats
+      const finalResults = combinedResults.slice(0, 10);
+
+      this.logger.log(`Résultats totaux trouvés: ${finalResults.length}`);
+
+      return finalResults;
+    } catch (error) {
+      this.logger.error(`Erreur lors de la recherche: ${error.message}`);
+      throw error;
+    }
   }
 
   @Get('similar')
@@ -271,10 +383,28 @@ export class RagController {
     if (!question) {
       throw new BadRequestException('Le paramètre "question" est requis');
     }
-    return await this.chromaService.findSimilarQuestions(
-      question,
-      limit ? parseInt(limit.toString(), 10) : 5,
-    );
+
+    try {
+      const collections = await this.ragService
+        .getChromaClient()
+        .listCollections();
+      this.logger.log(
+        `Collections disponibles: ${JSON.stringify(collections)}`,
+      );
+      this.logger.log(`Recherche pour la question: "${question}"`);
+
+      const results = await this.chromaService.findSimilarQuestions(
+        question,
+        limit ? parseInt(limit.toString(), 10) : 5,
+      );
+
+      this.logger.log(`Résultats trouvés: ${results.length}`);
+
+      return results;
+    } catch (error) {
+      this.logger.error(`Erreur lors de la recherche: ${error.message}`);
+      throw error;
+    }
   }
 
   @Post('analyse')
@@ -291,5 +421,37 @@ export class RagController {
       .join('\n\n');
     console.log(sqlQueries);
     // ... suite du traitement
+  }
+
+  @Get('collections')
+  async listCollections() {
+    try {
+      const collections = await this.ragService
+        .getChromaClient()
+        .listCollections();
+      return {
+        collections,
+        count: collections.length,
+        timestamp: new Date().toISOString(),
+      };
+    } catch (error) {
+      throw new HttpException(
+        `Erreur lors de la liste des collections: ${error.message}`,
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
+  }
+
+  @Get('questions')
+  async getAllQuestions(): Promise<string[]> {
+    try {
+      return await this.chromaService.getAllQuestions();
+    } catch (error) {
+      this.logger.error('Erreur lors de la récupération des questions:', error);
+      throw new HttpException(
+        'Erreur lors de la récupération des questions',
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
   }
 }

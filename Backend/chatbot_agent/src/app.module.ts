@@ -3,6 +3,7 @@ import { ConfigModule } from '@nestjs/config';
 import { ModelModule } from './model_ai/model.module';
 import { HealthModule } from './health/health.module';
 import { QuerierModule } from './bdd_querier/querier.module';
+import { AnalyseModule } from './analyze_service/analyze.module';
 
 @Module({
   imports: [
@@ -25,6 +26,7 @@ import { QuerierModule } from './bdd_querier/querier.module';
     ModelModule,
     HealthModule,
     QuerierModule,
+    AnalyseModule,
   ],
 })
 export class AppModule {}

@@ -1249,7 +1249,12 @@
         "Devis qui n'ont pas été acceptés récemment",
         "Propositions non retenues récentes",
         "Quels sont les derniers devis rejetés ?",
-        "Afficher les devis refusés récents"
+        "Afficher les devis refusés récents",
+        "Quels devis refusé récemment ?",
+        "Quels devis refusés récemment",
+        "Devis refusés",
+        "Devis rejetés",
+        "Quels devis refusé"
       ],
       "sql": "SELECT q.id, q.reference, q.issue_date, q.total_ht, q.total_ttc, c.firstname || ' ' || c.lastname AS client_name, p.name AS project_name, rqs.name AS status FROM quotations q JOIN projects p ON q.project_id = p.id JOIN clients c ON p.client_id = c.id JOIN ref_quotation_status rqs ON q.status = rqs.id WHERE rqs.code = 'refusé' ORDER BY q.issue_date DESC LIMIT 20 OFFSET 0",
       "description": "Liste des devis récemment refusés, triés par date",

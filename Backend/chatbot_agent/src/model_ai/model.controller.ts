@@ -5,10 +5,10 @@ import {
   Logger,
   HttpException,
   HttpStatus,
+  Get,
 } from '@nestjs/common';
 import { ModelService } from './model.service';
 import { QuerierService } from '../bdd_querier/querier.service';
-import { TextProcessorService } from './text-processor.service';
 import { HttpService } from '@nestjs/axios';
 import { firstValueFrom } from 'rxjs';
 
@@ -53,19 +53,35 @@ interface QueryExecutionResponse {
   textResponse?: string;
 }
 
-@Controller('ai')
+@Controller('model')
 export class ModelController {
   private readonly logger = new Logger(ModelController.name);
 
   constructor(
     private readonly modelService: ModelService,
     private readonly querierService: QuerierService,
-    private readonly textProcessorService: TextProcessorService,
     private readonly httpService: HttpService,
   ) {}
 
+  @Post('generate')
+  async generateResponse(@Body('question') question: string): Promise<any> {
+    return this.modelService.generateResponse(question);
+  }
+
+  @Get('test-lm-studio')
+  async testLmStudio() {
+    return this.modelService.testLmStudioConnection();
+  }
+
+  @Get('test-rag')
+  async testRag() {
+    return this.modelService.testRagConnection();
+  }
+
   @Post('query')
-  async generateResponse(@Body() queryDto: QueryDto): Promise<RagResponse> {
+  async generateResponseFromController(
+    @Body() queryDto: QueryDto,
+  ): Promise<RagResponse> {
     this.logger.log(`Received question: ${queryDto.question}`);
 
     const response = await this.modelService.generateResponse(
@@ -129,7 +145,7 @@ export class ModelController {
             description: response.querySelected.description,
           },
           alternativeQuestions: otherQueries,
-          textResponse: this.textProcessorService.generateTextResponse(
+          textResponse: await this.modelService.generateNaturalResponse(
             response.querySelected.description,
             sqlResult.result,
             queryDto.question,
@@ -207,7 +223,7 @@ export class ModelController {
           },
 
           // Réponse textuelle pour l'interface utilisateur
-          textResponse: this.textProcessorService.generateTextResponse(
+          textResponse: await this.modelService.generateNaturalResponse(
             ragResponse.querySelected.description,
             response.data.data || [],
             queryDto.question,
