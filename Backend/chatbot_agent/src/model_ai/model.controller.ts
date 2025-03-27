@@ -170,6 +170,7 @@ export class ModelController {
     }
   }
 
+
   @Post('query-run')
   async queryAndRun(@Body() queryDto: QueryDto): Promise<any> {
     this.logger.log(`Received RAG query and run request: ${queryDto.question}`);
@@ -179,6 +180,7 @@ export class ModelController {
       const ragResponse = await this.modelService.generateResponse(
         queryDto.question,
       );
+
 
       // 2. Envoyer la requête au contrôleur querier via HTTP
       const querierUrl = 'http://localhost:3001/query/rag';
