@@ -21,7 +21,8 @@ export class AnalyseService {
 
   private getLmStudioUrl(): string {
     return (
-      this.configService.get<string>('LM_STUDIO_URL') || 'http://lm_studio:1234'
+      this.configService.get<string>('LM_STUDIO_URL') ||
+      'https://34a3-2a01-cb15-4c5-c200-ff2e-b498-e114-f0c2.ngrok-free.app'
     );
   }
 
