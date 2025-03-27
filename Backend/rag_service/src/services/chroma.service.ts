@@ -514,4 +514,27 @@ export class ChromaService implements OnModuleInit {
       throw error;
     }
   }
+
+  async getAllQuestions(): Promise<string[]> {
+    return this.executeWithRetry(async () => {
+      if (!this.collection) {
+        this.logger.error('Collection non initialisée dans getAllQuestions');
+        return [];
+      }
+
+      try {
+        const results = await this.collection.get();
+        if (!results || !results.documents) {
+          return [];
+        }
+        return results.documents as string[];
+      } catch (error) {
+        this.logger.error(
+          'Erreur lors de la récupération des questions:',
+          error,
+        );
+        return [];
+      }
+    });
+  }
 }
