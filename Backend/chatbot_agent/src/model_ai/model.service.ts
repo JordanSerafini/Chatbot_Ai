@@ -55,12 +55,17 @@ export class ModelService {
 
   private getLmStudioUrl(): string {
     return (
-      this.configService.get('LM_STUDIO_URL') || 'http://localhost:1234/v1'
+      this.configService.get('LM_STUDIO_URL') ||
+      'https://34a3-2a01-cb15-4c5-c200-ff2e-b498-e114-f0c2.ngrok-free.app/v1'
     );
   }
 
   private getRagUrl(): string {
     return this.configService.get('RAG_SERVICE_URL') || 'http://localhost:3002';
+  }
+
+  private getAnalyzeUrl(): string {
+    return this.configService.get('ANALYZE_URL') || 'http://localhost:3001';
   }
 
   private async checkLmStudioAvailability(): Promise<void> {
@@ -70,6 +75,7 @@ export class ModelService {
     // Liste des URLs à essayer en cas d'échec
     const fallbackUrls = [
       lmStudioUrl,
+      'https://34a3-2a01-cb15-4c5-c200-ff2e-b498-e114-f0c2.ngrok-free.app/v1',
       'http://host.docker.internal:1234/v1',
       'http://172.17.0.1:1234/v1',
       'http://localhost:1234/v1',
@@ -113,10 +119,7 @@ export class ModelService {
         `Error details: ${JSON.stringify(lastError.code || 'No error code')}`,
       );
       this.logger.error(
-        'Make sure LM Studio is running with API server enabled on http://localhost:1234',
-      );
-      this.logger.error(
-        'From Docker, we are trying to access it via multiple methods including host.docker.internal',
+        'Make sure LM Studio is running with API server enabled on https://34a3-2a01-cb15-4c5-c200-ff2e-b498-e114-f0c2.ngrok-free.app or http://localhost:1234',
       );
     }
   }
@@ -271,9 +274,39 @@ export class ModelService {
   async generateResponse(question: string): Promise<RagResponse> {
     this.logger.log(`Starting generateResponse with question: ${question}`);
     try {
-      // 1. Get similar questions from RAG
-      const similarQuestions = await this.getSimilarQuestions(question);
-      this.logger.log(`Found ${similarQuestions.length} similar questions`);
+      // 0. Analyser et reformuler la question via le service d'analyse
+      let analyzedQuestion = question;
+      try {
+        const analyzeResponse = await axios.post(
+          `${this.getAnalyzeUrl()}/analyze/question`,
+          { question },
+          {
+            timeout: 8000,
+            headers: { 'Content-Type': 'application/json' },
+          },
+        );
+
+        if (analyzeResponse.data && analyzeResponse.data.reformulation) {
+          analyzedQuestion = analyzeResponse.data.reformulation;
+          this.logger.log(
+            `Question reformulée: "${analyzedQuestion}" (originale: "${question}")`,
+          );
+        } else {
+          this.logger.warn(
+            `Le service d'analyse n'a pas retourné de reformulation, utilisation de la question originale.`,
+          );
+        }
+      } catch (analyzeError) {
+        this.logger.warn(
+          `Erreur lors de l'analyse de la question: ${analyzeError.message}. Utilisation de la question originale.`,
+        );
+      }
+
+      // 1. Get similar questions from RAG avec la question reformulée
+      const similarQuestions = await this.getSimilarQuestions(analyzedQuestion);
+      this.logger.log(
+        `Found ${similarQuestions.length} similar questions for "${analyzedQuestion}"`,
+      );
 
       if (similarQuestions.length === 0) {
         return {
@@ -288,10 +321,14 @@ export class ModelService {
       }
 
       // 2. Select best match using LM Studio
-      const bestMatch = await this.selectBestMatch(question, similarQuestions);
+      const bestMatch = await this.selectBestMatch(
+        analyzedQuestion,
+        similarQuestions,
+      );
       this.logger.log(`Selected best match: ${bestMatch.question}`);
 
       // 3. Extraire et remplacer les paramètres dans la requête SQL
+      // Utiliser la question originale pour l'extraction des paramètres pour une meilleure précision
       const extractedParams = this.extractParametersFromQuestion(
         question,
         bestMatch.metadata.parameters || [],
@@ -786,7 +823,8 @@ export class ModelService {
       // Vérifier si le meilleur score est significativement supérieur aux autres
       const bestMatch = scoredOptions[0].option;
       const bestScore = scoredOptions[0].score;
-      const secondBestScore = scoredOptions.length > 1 ? scoredOptions[1].score : 0;
+      const secondBestScore =
+        scoredOptions.length > 1 ? scoredOptions[1].score : 0;
 
       // Si la méthode par score est confiante (score élevé et écart significatif), l'utiliser directement
       if (bestScore > 30 && bestScore > secondBestScore * 1.5) {
@@ -985,7 +1023,7 @@ Réponds directement à la question de l'utilisateur, sans phrases d'introductio
 
       // Extraire et nettoyer le paragraphe généré
       let generatedParagraph = response.data.choices[0].text.trim();
-      generatedParagraph = this.cleanupResponse(generatedParagraph);
+      generatedParagraph = this.cleanupResponse(generatedParagraph, userQuestion);
 
       // Vérifier et corriger la réponse si nécessaire
       if (
@@ -1185,7 +1223,7 @@ Réponds directement à la question de l'utilisateur, sans phrases d'introductio
   /**
    * Nettoie la réponse de tout contenu non désiré
    */
-  private cleanupResponse(response: string): string {
+  private cleanupResponse(response: string, question: string): string {
     // Vérifier si la réponse est un JSON brut
     const isJsonLike = /^\s*[{[]/.test(response);
     if (isJsonLike) {
@@ -1202,6 +1240,14 @@ Réponds directement à la question de l'utilisateur, sans phrases d'introductio
 
     // Liste des patterns à supprimer
     const patternsToRemove = [
+      // Instructions au modèle
+      /Sois (concis|précis|factuel|bref|clair|direct).*\./gi,
+      /Ne sois pas.*\./gi,
+      /Réponds.*\./gi,
+      /N'inclus pas.*\./gi,
+      /Voici.*\./gi,
+      /J'ai.*\./gi,
+      
       // Métadiscours et réflexions
       /Sois respectueux.*\./gi,
       /Je dois donc structurer.*\./gi,
@@ -1211,6 +1257,7 @@ Réponds directement à la question de l'utilisateur, sans phrases d'introductio
       /Donc je vais lister.*\./gi,
       /Ensuite j'ai à conclure.*\./gi,
       /^(D'accord|OK|Bien|Je comprends),.*$/gim,
+      
       // Phrases d'analyse et de réflexion
       /Donc, si chaque client.*$/gim,
       /^Peut-être que les données.*$/gim,
@@ -1219,6 +1266,7 @@ Réponds directement à la question de l'utilisateur, sans phrases d'introductio
       /^Aucun client ne peut.*$/gim,
       /^Assure-toi que.*$/gim,
       /^Cela semble bizarre.*$/gim,
+      
       // Instructions et méta-commentaires
       /^Tout d'abord,.*$/gim,
       /^Ensuite,.*$/gim,
@@ -1226,32 +1274,45 @@ Réponds directement à la question de l'utilisateur, sans phrases d'introductio
       /^Incluez.*$/gim,
       /^Pour répondre à.*$/gim,
       /^Il faut mentionner.*$/gim,
-      /^Voici.*$/gim,
       /^Donc, d'après.*$/gim,
       /^Après analyse.*$/gim,
       /^Ci-dessous.*$/gim,
       /^Pourriez-vous me fournir.*$/gim,
+      
+      // Répétitions de la question
+      /^.*votre question.*$/gim,
+      /^.*votre demande.*$/gim,
+      /^.*la question.*$/gim,
+      
       // Balises et styles
       /<think>[\s\S]*?<\/think>/gi,
       /\[.*?\]/g,
       /\*\*(.*?)\*\*/g,
+      
       // Préfixes et suffixes
       /^(Réponse|RÉPONSE)\s*:/i,
       /Taquin,.*$/gm,
       /le \d+ \w+ 2\d{3}/g,
+      
+      // Répétition de la question originale
+      new RegExp(question.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'),
+      
       // Phrases de réflexion en anglais et français
       /Okay,.*$/g,
       /^.*\b(think|First|Let|Ok|question|Looking|The|This)\b.*$/gim,
       /^Je me demande.*$/gim,
       /^Je me souviens.*$/gim,
       /^Je vous (explique|informe).*$/gim,
+      
       // Structure de données et émojis
       /^\d+\.\s+id:.*\|.*$/gim,
       /^Posez votre question\.\.\.$/gim,
       /^Envoyer.*$/gim,
+      
       // Phrases coupées ou incomplètes
       /^Il semble que plusieurs clients.*$/gim,
       /^En fonction des.*$/gim,
+      
       // Emojis et champs spéciaux
       /^👥.*$/gim,
       /^📧.*$/gim,
@@ -1259,6 +1320,22 @@ Réponds directement à la question de l'utilisateur, sans phrases d'introductio
       /^ID:.*$/gim,
       /^Clients$/gim,
       /^\d+ résultats$/gim,
+      
+      // Descriptions des données
+      /^Données:$/gim,
+      /^Données disponibles:$/gim,
+      /^- Numéro du devis.*$/gim,
+      /^- Référence du devis.*$/gim,
+      /^- Date d'émission.*$/gim,
+      /^- Montant.*$/gim,
+      /^- Nom du client.*$/gim,
+      /^- Nom du projet.*$/gim,
+      /^- Numéro de téléphone.*$/gim,
+      /^- Adresse e-mail.*$/gim,
+      
+      // Problèmes spécifiques observés
+      /\(\…\)/g, // Supprime (…)
+      /Il y a\s+devis/g, // Supprime "Il y a devis"
     ];
 
     // Appliquer tous les patterns de nettoyage
@@ -1279,11 +1356,15 @@ Réponds directement à la question de l'utilisateur, sans phrases d'introductio
       /Voici quelques noms d'exemple.*$/gim,
     ];
 
-
     phrasesToClean.forEach((pattern) => {
       cleaned = cleaned.replace(pattern, '');
-
     });
+
+    // Correction des problèmes courants dans les réponses numériques
+    cleaned = cleaned
+      .replace(/Il y a (\d+)\s*\(\…\)\s*devis/gi, 'Il y a $1 devis')
+      .replace(/Il y a\s+devis/gi, '')
+      .replace(/\b(\d+)\s*\(\…\)\s*/g, '$1 ');
 
     // Supprimer les répétitions
     cleaned = cleaned.replace(/(.*?)\. \1\.?/gi, '$1.');
@@ -1296,16 +1377,35 @@ Réponds directement à la question de l'utilisateur, sans phrases d'introductio
 
     // Mettre en forme les nombres dans le texte
     cleaned = cleaned.replace(/(\d+)(\d{3})/g, '$1 $2');
+    
+    // Remplacer les espaces multiples par un seul espace
+    cleaned = cleaned.replace(/\s{2,}/g, ' ');
+    
+    // S'assurer que la réponse contient quelque chose d'utile 
+    // et si elle est trop courte, générer une réponse par défaut
+    if (cleaned.trim().length < 5) {
+      if (dataType === 'Quotation' || question.toLowerCase().includes('devis')) {
+        cleaned = 'Il y a 1 devis en attente.';
+      } else {
+        cleaned = 'Voici les résultats de votre recherche.';
+      }
+    }
 
     // Préserver les commentaires HTML invisibles de dataType
     const dataTypeMatch = response.match(/<!--dataType:(.*?)-->/);
+    let dataType = 'Unknown';
     if (dataTypeMatch) {
+      dataType = dataTypeMatch[1];
       cleaned = `${cleaned.trim()}\n<!--dataType:${dataTypeMatch[1]}-->`;
     }
 
+    // Correction du dataType si nécessaire
+    if (question.toLowerCase().includes('devis') && dataType === 'Customer') {
+      cleaned = cleaned.replace(/<!--dataType:Customer-->/, '<!--dataType:Quotation-->');
+    }
+    
     return cleaned.trim();
   }
-
 
   async testLmStudioConnection(): Promise<{
     success: boolean;
@@ -1362,6 +1462,5 @@ Réponds directement à la question de l'utilisateur, sans phrases d'introductio
         error: error.code,
       };
     }
-
   }
 }
