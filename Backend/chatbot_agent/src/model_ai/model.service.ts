@@ -1279,8 +1279,10 @@ Réponds directement à la question de l'utilisateur, sans phrases d'introductio
       /Voici quelques noms d'exemple.*$/gim,
     ];
 
+
     phrasesToClean.forEach((pattern) => {
       cleaned = cleaned.replace(pattern, '');
+
     });
 
     // Supprimer les répétitions
@@ -1303,6 +1305,7 @@ Réponds directement à la question de l'utilisateur, sans phrases d'introductio
 
     return cleaned.trim();
   }
+
 
   async testLmStudioConnection(): Promise<{
     success: boolean;
@@ -1359,5 +1362,6 @@ Réponds directement à la question de l'utilisateur, sans phrases d'introductio
         error: error.code,
       };
     }
+
   }
 }
