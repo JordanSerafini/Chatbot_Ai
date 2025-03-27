@@ -33,7 +33,7 @@ export class AnalyseService {
         );
         return response.data;
       } catch (error) {
-        console.error("Erreur lors de la récupération des questions:", error);
+        console.error('Erreur lors de la récupération des questions:', error);
         return [];
       }
     };
@@ -60,7 +60,9 @@ export class AnalyseService {
     }
   }
 
-  private async getSimilarQuestionsFromRag(question: string): Promise<RagQuestion | null> {
+  private async getSimilarQuestionsFromRag(
+    question: string,
+  ): Promise<RagQuestion | null> {
     try {
       const response = await this.httpService.axiosRef.get(
         `${this.configService.get('RAG_URL')}/rag/similar`,
