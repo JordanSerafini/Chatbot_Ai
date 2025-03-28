@@ -495,7 +495,7 @@
         "Quels projets ont été créés dernièrement ?",
         "Affiche les projets récents",
         "Montre les projets créés récemment",
-        "Projets qui viennent d’être ajoutés",
+        "Projets qui viennent d'être ajoutés",
         "Quels chantiers ont été ajoutés récemment ?",
         "Quelles sont les dernières entrées projets ?",
         "Quels projets ont été enregistrés en dernier ?",
@@ -536,11 +536,11 @@
         "Quels projets n'ont pas reçu de facture ?",
         "Quels projets n'ont pas été facturés ?",
         "Liste des projets à facturer",
-        "Quels chantiers n’ont aucune facture ?",
-        "Quels projets n’ont pas encore eu de facturation ?",
+        "Quels chantiers n'ont aucune facture ?",
+        "Quels projets n'ont pas encore eu de facturation ?",
         "Projets qui n'ont pas encore été facturés",
-        "Quels projets n’ont pas de facture générée ?",
-        "Quels chantiers n’ont pas encore de facture ?"
+        "Quels projets n'ont pas de facture générée ?",
+        "Quels chantiers n'ont pas encore de facture ?"
       ],
       "sql": "SELECT p.id, p.name, p.start_date, p.end_date, c.firstname || ' ' || c.lastname AS client_name, rs.name AS status FROM projects p JOIN clients c ON p.client_id = c.id JOIN ref_status rs ON p.status = rs.id WHERE NOT EXISTS (SELECT 1 FROM invoices i WHERE i.project_id = p.id) ORDER BY p.start_date DESC",
       "description": "Liste des projets qui n'ont pas encore de factures associées"
@@ -667,7 +667,7 @@
         "Quels chantiers ont prévu du [MATERIAL] ?",
         "Dans quels projets on retrouve [MATERIAL] ?",
         "Quels projets utilisent ce matériau : [MATERIAL] ?",
-        "Où est prévu l’usage de [MATERIAL] ?",
+        "Où est prévu l'usage de [MATERIAL] ?",
         "Quels sont les chantiers avec [MATERIAL] dans leur besoin ?",
         "Quels projets impliquent l'utilisation de [MATERIAL] ?"
       ],
@@ -795,7 +795,7 @@
         "Quels projets ont été bien gérés financièrement ?",
         "Quels projets sont à risque niveau budget ?",
         "Budget consommé vs budget total pour chaque projet",
-        "Quel est l’état budgétaire actuel des chantiers ?",
+        "Quel est l'état budgétaire actuel des chantiers ?",
         "Analyse des budgets de projet",
         "Chantiers avec suivi des dépenses"
       ],
@@ -977,7 +977,7 @@
         "Projets avec matos abîmé",
         "Projets concernés par des pannes d'équipement",
         "Chantiers avec souci de matériel",
-        "Quels chantiers ont des problèmes d’outillage ?",
+        "Quels chantiers ont des problèmes d'outillage ?",
         "Liste des chantiers avec matos HS",
         "Quels projets ont du matériel en maintenance ?",
         "Problèmes techniques sur quels projets ?",
@@ -1001,7 +1001,7 @@
         "Projets avec commandes de matériaux non livrées",
         "Demandes de fournitures en attente par projet",
         "Matériaux manquants sur les chantiers",
-        "Quels projets n’ont pas encore reçu leurs matériaux ?",
+        "Quels projets n'ont pas encore reçu leurs matériaux ?",
         "Quels projets sont en attente de livraison ?",
         "Demandes de matos en cours",
         "Quels chantiers attendent leurs matériaux ?",
@@ -1010,7 +1010,7 @@
         "Commandes de matériaux toujours en attente",
         "Projets avec livraisons de matériaux en retard",
         "Demandes de matériaux pas encore traitées",
-        "Quels projets n’ont pas reçu leurs fournitures ?",
+        "Quels projets n'ont pas reçu leurs fournitures ?",
         "Fournitures en attente sur chantiers",
         "Quels projets ont des besoins matériaux non couverts ?"
       ],
@@ -1108,7 +1108,7 @@
         "Chantiers les plus longs",
         "Quel chantier a duré plusieurs mois ?",
         "Projet ayant nécessité le plus de jours",
-        "Durée maximale d’un projet ?"
+        "Durée maximale d'un projet ?"
       ],
       "sql": "SELECT p.name, p.start_date, p.end_date, (p.end_date - p.start_date) AS duration_days FROM projects p WHERE p.end_date IS NOT NULL AND p.start_date IS NOT NULL ORDER BY (p.end_date - p.start_date) DESC LIMIT 1",
       "description": "Identifie le projet qui a eu la plus longue durée de réalisation en jours"
@@ -1164,16 +1164,16 @@
         "Quels projets ont le plus de jalons ?",
         "Quels projets ont le plus de sections ?",
         "Chantiers divisés en de nombreuses étapes",
-        "Classement des projets avec le plus d’étapes",
-        "Top des projets avec le plus d’étapes",
+        "Classement des projets avec le plus d'étapes",
+        "Top des projets avec le plus d'étapes",
         "Quels projets sont les plus longs en nombre de phases ?",
         "Quels projets ont la plus grande structure ?",
         "Quels chantiers ont un planning très découpé ?",
         "Quels projets sont constitués de nombreuses étapes ?",
         "Quels chantiers ont été planifiés en beaucoup d'étapes ?",
-        "Liste des projets avec le plus d’étapes définies",
+        "Liste des projets avec le plus d'étapes définies",
         "Quels projets ont le plus de segments ?",
-        "Quels projets ont le plus d’éléments dans leur planification ?"
+        "Quels projets ont le plus d'éléments dans leur planification ?"
       ],
       "sql": "SELECT p.id, p.name, p.start_date, p.end_date, c.firstname || ' ' || c.lastname AS client_name, COUNT(s.id) AS stage_count FROM projects p JOIN clients c ON p.client_id = c.id LEFT JOIN stages s ON p.id = s.project_id GROUP BY p.id, p.name, p.start_date, p.end_date, c.firstname, c.lastname ORDER BY stage_count DESC LIMIT 10",
       "description": "Liste des 10 projets ayant le plus grand nombre d'étapes définies"
@@ -1241,7 +1241,7 @@
         "Quels projets affichent les meilleurs indicateurs qualité ?",
         "Quels sont les projets les plus soignés ?",
         "Projets sans défauts qualité",
-        "Quels projets n’ont aucun rejet qualité ?",
+        "Quels projets n'ont aucun rejet qualité ?",
         "Projets au top en matière de qualité",
         "Chantiers irréprochables en termes de qualité",
         "Quels projets sont des références qualité ?"
@@ -1258,10 +1258,10 @@
         "Liste des projets avec le plus de rendez-vous",
         "Quels projets ont le plus d'événements prévus ?",
         "Projets les plus occupés en termes de planning",
-        "Quels chantiers ont le plus d’activités programmées ?",
-        "Quels projets ont le plus d’entrées dans le calendrier ?",
+        "Quels chantiers ont le plus d'activités programmées ?",
+        "Quels projets ont le plus d'entrées dans le calendrier ?",
         "Top des projets les plus planifiés",
-        "Quels sont les projets avec le plus d’événements enregistrés ?",
+        "Quels sont les projets avec le plus d'événements enregistrés ?",
         "Quels projets ont le calendrier le plus rempli ?",
         "Liste des projets les plus actifs sur le calendrier",
         "Quels chantiers sont les plus sollicités ?",
@@ -1286,7 +1286,7 @@
         "Quels chantiers sont en activité cette semaine ?",
         "Quels sont les projets planifiés pour cette semaine ?",
         "Projets en exécution cette semaine",
-        "Quels sont les projets en cours d’exécution actuellement ?",
+        "Quels sont les projets en cours d'exécution actuellement ?",
         "Quels projets sont ouverts cette semaine ?",
         "Activité chantier en cours cette semaine",
         "Quels sont les chantiers de la semaine ?",
@@ -1297,7 +1297,7 @@
         "Chantiers planifiés pour la semaine en cours",
         "Quels sont les projets en cours du lundi au dimanche ?",
         "Quels projets figurent dans le planning de cette semaine ?",
-        "Qu’est-ce qui est en cours cette semaine côté projets ?",
+        "Qu'est-ce qui est en cours cette semaine côté projets ?",
         "Quels chantiers sont prévus ou en exécution cette semaine ?"
       ],
       "sql": "SELECT p.id, p.name, p.start_date, p.end_date, c.firstname || ' ' || c.lastname AS client_name, rs.name AS status FROM projects p JOIN clients c ON p.client_id = c.id JOIN ref_status rs ON p.status = rs.id WHERE rs.code = 'en_cours' AND rs.entity_type = 'project' AND CURRENT_DATE BETWEEN (CURRENT_DATE - EXTRACT(DOW FROM CURRENT_DATE)::INTEGER * INTERVAL '1 day') AND (CURRENT_DATE - EXTRACT(DOW FROM CURRENT_DATE)::INTEGER * INTERVAL '1 day' + INTERVAL '6 days') ORDER BY p.name",
@@ -1485,7 +1485,7 @@
         "Quels projets ont des phases qui traînent ?",
         "Projets avec retard dans l'exécution des étapes",
         "Étapes prévues mais non terminées à la date butoir",
-        "Quels projets sont bloqués à cause d’étapes en retard ?",
+        "Quels projets sont bloqués à cause d'étapes en retard ?",
         "Retards d'étapes : quels projets concernés ?",
         "Phases critiques en retard sur les chantiers",
         "Quelles tâches dépassent leur deadline ?",
@@ -1510,7 +1510,7 @@
         "Quels sont les chantiers préférés des clients ?",
         "Projets les plus appréciés par les clients",
         "Quels projets ont les meilleures évaluations clients ?",
-        "Feedback client : quels projets s’en sortent le mieux ?",
+        "Feedback client : quels projets s'en sortent le mieux ?",
         "Quels chantiers ont le plus de commentaires positifs ?",
         "Top des projets avec une satisfaction client élevée",
         "Quels clients ont exprimé leur satisfaction ? Et sur quels projets ?",
@@ -1574,7 +1574,7 @@
         "Est-ce qu'on a plus de projets qu'avant ?",
         "On a progressé en termes de projets entre deux périodes ?",
         "Quels sont les chiffres clés entre deux périodes ?",
-        "Quelle est la différence d’activité entre ces deux moments ?",
+        "Quelle est la différence d'activité entre ces deux moments ?",
         "Analyse des clients et budgets sur deux intervalles de temps",
         "Compare les budgets moyens et projets terminés entre deux périodes",
         "Évolution du nombre de projets clients et durées moyennes",
@@ -1685,7 +1685,7 @@
         "Liste des chantiers livrés en retard",
         "Quels projets n'ont pas respecté les délais ?",
         "Quels chantiers ont été prolongés dans le temps ?",
-        "Chantiers avec retard d’achèvement",
+        "Chantiers avec retard d'achèvement",
         "Les projets ont-ils respecté leurs délais ?",
         "Quels projets sont sortis du timing initial ?"
       ],
@@ -1864,7 +1864,7 @@
         "Chantiers avec livraisons non conformes",
         "Projets impactés par des annulations de commande",
         "Quels chantiers ont eu des soucis de logistique ?",
-        "Liste des projets avec incidents d’approvisionnement",
+        "Liste des projets avec incidents d'approvisionnement",
         "Quels projets ont des anomalies dans les livraisons ?",
         "Projets où les quantités livrées ne correspondent pas",
         "Quels projets ont des commandes annulées ou incomplètes ?",
@@ -1874,6 +1874,23 @@
       ],
       "sql": "SELECT p.id, p.name, p.start_date, c.firstname || ' ' || c.lastname AS client_name, COUNT(so.id) FILTER (WHERE so.status = 'annulé') AS commandes_annulees, COUNT(so.id) FILTER (WHERE so.status = 'livré' AND so.quantity_received != so.quantity_ordered) AS livraisons_incorrectes FROM projects p JOIN clients c ON p.client_id = c.id JOIN supplier_orders so ON p.id = so.project_id GROUP BY p.id, p.name, p.start_date, c.firstname, c.lastname HAVING COUNT(so.id) FILTER (WHERE so.status = 'annulé') > 0 OR COUNT(so.id) FILTER (WHERE so.status = 'livré' AND so.quantity_received != so.quantity_ordered) > 0 ORDER BY commandes_annulees DESC, livraisons_incorrectes DESC",
       "description": "Liste des projets avec des problèmes d'approvisionnement (commandes annulées ou livraisons incorrectes)"
+    },
+    {
+      "id": "projects_with_long_pauses",
+      "questions": [
+        "Quels projets ont des pauses longues ?",
+        "Chantiers avec interruptions prolongées",
+        "Projets ayant des périodes d'inactivité",
+        "Liste des projets avec arrêts prolongés",
+        "Quels chantiers sont en pause depuis longtemps ?",
+        "Projets avec des interruptions importantes",
+        "Quels projets ont des périodes sans activité ?",
+        "Chantiers suspendus pour une longue durée",
+        "Quels projets ont des pauses de plus de 15 jours ?",
+        "Projets avec des pauses significatives"
+      ],
+      "sql": "WITH project_activity AS (SELECT p.id, p.name, p.start_date, p.end_date, c.firstname || ' ' || c.lastname AS client_name, rs.name AS status, te.date, LEAD(te.date) OVER (PARTITION BY p.id ORDER BY te.date) AS next_activity_date FROM projects p JOIN clients c ON p.client_id = c.id JOIN ref_status rs ON p.status = rs.id LEFT JOIN timesheet_entries te ON p.id = te.project_id), project_pauses AS (SELECT id, name, start_date, end_date, client_name, status, date AS last_activity, next_activity_date, (next_activity_date - date) AS pause_duration FROM project_activity WHERE next_activity_date IS NOT NULL AND (next_activity_date - date) > 15) SELECT id, name, start_date, end_date, client_name, status, last_activity, next_activity_date, pause_duration FROM project_pauses ORDER BY pause_duration DESC",
+      "description": "Liste des projets ayant des périodes d'inactivité supérieures à 15 jours, basées sur les entrées de feuilles de temps"
     }    
   ]
 }
