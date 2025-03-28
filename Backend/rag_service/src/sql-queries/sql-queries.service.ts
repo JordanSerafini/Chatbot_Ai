@@ -2,7 +2,6 @@ import { Injectable, Logger } from '@nestjs/common';
 import {
   ChromaClient,
   Collection,
-  GetCollectionParams,
   Metadata,
   DefaultEmbeddingFunction,
 } from 'chromadb';
