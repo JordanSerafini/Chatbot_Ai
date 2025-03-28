@@ -71,31 +71,58 @@ export class SqlQueriesService {
 
   private async initializeCollections() {
     try {
-      const params: Omit<GetCollectionParams, 'metadata'> = {
-        name: this.COLLECTION_NAME,
-        embeddingFunction: this.embeddingFunction,
-      };
+      this.logger.log(
+        `Tentative d'initialisation des collections: ${this.COLLECTION_NAME} et ${this.HASH_COLLECTION_NAME}`,
+      );
 
-      const hashParams: Omit<GetCollectionParams, 'metadata'> = {
-        name: this.HASH_COLLECTION_NAME,
-        embeddingFunction: this.embeddingFunction,
-      };
+      // Vérifier d'abord si les collections existent
+      const collections = await this.client.listCollections();
+      this.logger.log(`Collections existantes: ${JSON.stringify(collections)}`);
 
       // Créer ou récupérer la collection principale
-      this.collection = await this.client.createCollection(params);
+      if (collections.includes(this.COLLECTION_NAME)) {
+        this.logger.log(
+          `Collection ${this.COLLECTION_NAME} existe déjà, récupération...`,
+        );
+        this.collection = await this.client.getCollection({
+          name: this.COLLECTION_NAME,
+          embeddingFunction: this.embeddingFunction,
+        });
+      } else {
+        this.logger.log(
+          `Collection ${this.COLLECTION_NAME} n'existe pas, création...`,
+        );
+        this.collection = await this.client.createCollection({
+          name: this.COLLECTION_NAME,
+          embeddingFunction: this.embeddingFunction,
+        });
+      }
 
       // Créer ou récupérer la collection de hashes
-      this.hashCollection = await this.client.createCollection(hashParams);
-    } catch {
-      // Si les collections existent déjà, les récupérer
-      this.collection = await this.client.getCollection({
-        name: this.COLLECTION_NAME,
-        embeddingFunction: this.embeddingFunction,
-      });
-      this.hashCollection = await this.client.getCollection({
-        name: this.HASH_COLLECTION_NAME,
-        embeddingFunction: this.embeddingFunction,
-      });
+      if (collections.includes(this.HASH_COLLECTION_NAME)) {
+        this.logger.log(
+          `Collection ${this.HASH_COLLECTION_NAME} existe déjà, récupération...`,
+        );
+        this.hashCollection = await this.client.getCollection({
+          name: this.HASH_COLLECTION_NAME,
+          embeddingFunction: this.embeddingFunction,
+        });
+      } else {
+        this.logger.log(
+          `Collection ${this.HASH_COLLECTION_NAME} n'existe pas, création...`,
+        );
+        this.hashCollection = await this.client.createCollection({
+          name: this.HASH_COLLECTION_NAME,
+          embeddingFunction: this.embeddingFunction,
+        });
+      }
+
+      this.logger.log('Initialisation des collections terminée avec succès');
+    } catch (error) {
+      this.logger.error(
+        `Erreur lors de l'initialisation des collections: ${error.message}`,
+      );
+      throw error;
     }
   }
 
