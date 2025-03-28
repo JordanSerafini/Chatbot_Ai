@@ -12,7 +12,8 @@ import { AnalyseModule } from './analyze_service/analyze.module';
       load: [
         () => ({
           LM_STUDIO_URL:
-            process.env.LM_STUDIO_URL || 'http://localhost:1234/v1',
+            process.env.LM_STUDIO_URL ||
+            'https://34a3-2a01-cb15-4c5-c200-ff2e-b498-e114-f0c2.ngrok-free.app',
           RAG_SERVICE_URL:
             process.env.RAG_SERVICE_URL || 'http://localhost:3002',
           POSTGRES_HOST: process.env.POSTGRES_HOST || 'postgres',
