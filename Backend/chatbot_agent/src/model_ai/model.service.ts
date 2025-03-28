@@ -56,7 +56,7 @@ export class ModelService {
   private getLmStudioUrl(): string {
     return (
       this.configService.get('LM_STUDIO_URL') ||
-      'https://34a3-2a01-cb15-4c5-c200-ff2e-b498-e114-f0c2.ngrok-free.app/v1'
+      'https://9817-2a01-cb15-4c5-c200-f2fb-3748-6412-c45a.ngrok-free.app/v1'
     );
   }
 
@@ -75,7 +75,7 @@ export class ModelService {
     // Liste des URLs à essayer en cas d'échec
     const fallbackUrls = [
       lmStudioUrl,
-      'https://34a3-2a01-cb15-4c5-c200-ff2e-b498-e114-f0c2.ngrok-free.app/v1',
+      'https://9817-2a01-cb15-4c5-c200-f2fb-3748-6412-c45a.ngrok-free.app/v1',
       'http://host.docker.internal:1234/v1',
       'http://172.17.0.1:1234/v1',
       'http://localhost:1234/v1',
@@ -119,7 +119,7 @@ export class ModelService {
         `Error details: ${JSON.stringify(lastError.code || 'No error code')}`,
       );
       this.logger.error(
-        'Make sure LM Studio is running with API server enabled on https://34a3-2a01-cb15-4c5-c200-ff2e-b498-e114-f0c2.ngrok-free.app or http://localhost:1234',
+        'Make sure LM Studio is running with API server enabled on LM_STUDIO_URL=https://9817-2a01-cb15-4c5-c200-f2fb-3748-6412-c45a.ngrok-free.app/v1 or http://localhost:1234',
       );
     }
   }
@@ -321,7 +321,7 @@ export class ModelService {
       }
 
       // 2. Select best match using LM Studio
-      const bestMatch = await this.selectBestMatch(
+      const bestMatch = this.selectBestMatch(
         analyzedQuestion,
         similarQuestions,
       );
@@ -743,10 +743,10 @@ export class ModelService {
     return Math.max(0, score); // Empêcher les scores négatifs
   }
 
-  private async selectBestMatch(
+  private selectBestMatch(
     question: string,
     options: RagQuestion[],
-  ): Promise<RagQuestion> {
+  ): RagQuestion {
     try {
       this.logger.log(`Sélection pour la question: "${question}"`);
 
@@ -754,141 +754,125 @@ export class ModelService {
       const normalizedQuestion = question
         .toLowerCase()
         .normalize('NFD')
-        .replace(/[\u0300-\u036f]/g, '');
+        .replace(/[\u0300-\u036f]/g, '')
+        .trim();
 
-      // Essayer d'abord une approche purement basée sur le score
-      const scoredOptions = options.map((option) => {
+      // Détection spécifique pour les références temporelles
+      const hasYear = normalizedQuestion.includes('annee') || 
+                     normalizedQuestion.includes('année') || 
+                     normalizedQuestion.includes('cette année') ||
+                     normalizedQuestion.includes('annuel');
+                     
+      const hasMonth = normalizedQuestion.includes('mois') || 
+                      normalizedQuestion.includes('ce mois') || 
+                      normalizedQuestion.includes('mois en cours');
+                      
+      const hasWeek = normalizedQuestion.includes('semaine') || 
+                     normalizedQuestion.includes('cette semaine');
+
+      // 1. Recherche directe d'options contenant les mêmes références temporelles
+      const temporalMatches = options.filter(option => {
+        const normalizedOption = option.question
+          .toLowerCase()
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '')
+          .trim();
+          
+        if (hasYear && normalizedOption.includes('année')) return true;
+        if (hasMonth && normalizedOption.includes('mois')) return true;
+        if (hasWeek && normalizedOption.includes('semaine')) return true;
+        
+        return false;
+      });
+      
+      // Si on trouve des correspondances temporelles exactes, on priorise celles-ci
+      if (temporalMatches.length > 0) {
+        // Trier par distance pour prendre la plus proche
+        temporalMatches.sort((a, b) => a.distance - b.distance);
+        const bestTemporalMatch = temporalMatches[0];
+        
+        this.logger.log(
+          `Option sélectionnée par correspondance temporelle: "${bestTemporalMatch.question}" (distance: ${bestTemporalMatch.distance})`,
+        );
+        
+        return bestTemporalMatch;
+      }
+      
+      // 2. Si aucune correspondance temporelle, utiliser la méthode par score de mots
+      const scoredOptions = options.map(option => {
         const normalizedOptionQuestion = option.question
           .toLowerCase()
           .normalize('NFD')
-          .replace(/[\u0300-\u036f]/g, '');
+          .replace(/[\u0300-\u036f]/g, '')
+          .trim();
 
-        let score = 0;
-
-        // Score de base pour les mots communs
-        const questionWords = normalizedQuestion.split(/\s+/);
-        const optionWords = normalizedOptionQuestion.split(/\s+/);
-
-        // Mots exacts en commun (mots significatifs)
-        const commonWords = questionWords.filter(
-          (word) => optionWords.includes(word) && word.length > 2,
+        // Score basé sur les mots communs
+        const questionWords = normalizedQuestion
+          .split(/\s+/)
+          .filter(word => word.length > 2);
+          
+        const optionWords = normalizedOptionQuestion
+          .split(/\s+/)
+          .filter(word => word.length > 2);
+        
+        // Calculer le pourcentage de mots communs
+        const commonWords = questionWords.filter(word => 
+          optionWords.includes(word)
         );
-        score += commonWords.length * 5;
-
-        // Mots-clés importants avec leurs poids
-        const keywordMap = {
-          client: 30,
-          projet: 25,
-          cours: 20,
-          travail: 30,
-          travaille: 30,
-          qui: 15,
-          semaine: 15,
-          prochaine: 20,
-          facture: 30,
-          devis: 30,
-        };
-
-        // Appliquer les bonus pour chaque mot-clé présent dans les deux textes
-        Object.entries(keywordMap).forEach(([keyword, value]) => {
-          if (
-            normalizedQuestion.includes(keyword) &&
-            normalizedOptionQuestion.includes(keyword)
-          ) {
-            score += value;
-          }
-        });
-
-        // Pénalités pour les négations et contradictions sémantiques
-        if (
-          (normalizedQuestion.includes('avec') &&
-            normalizedOptionQuestion.includes('sans')) ||
-          (normalizedQuestion.includes('sans') &&
-            normalizedOptionQuestion.includes('avec')) ||
-          normalizedOptionQuestion.includes("n'ont pas") ||
-          normalizedOptionQuestion.includes('aucun')
-        ) {
+        
+        const percentageMatch = questionWords.length > 0
+          ? (commonWords.length / questionWords.length) * 100
+          : 0;
+        
+        // Score initial basé sur le pourcentage de correspondance
+        let score = percentageMatch;
+        
+        // Pénalités pour les incohérences temporelles
+        if (hasYear && !normalizedOptionQuestion.includes('année') && normalizedOptionQuestion.includes('mois')) {
           score -= 50;
         }
-
-        return { option, score };
+        
+        if (hasMonth && !normalizedOptionQuestion.includes('mois') && normalizedOptionQuestion.includes('année')) {
+          score -= 30;
+        }
+        
+        // Bonus pour distance faible
+        if (option.distance < 0.3) {
+          score += 20;
+        }
+        
+        return {
+          option,
+          score,
+          commonWords: commonWords.length,
+          totalWords: questionWords.length,
+        };
       });
-
-      // Trier par score puis par distance
+      
+      // Trier par score
       scoredOptions.sort((a, b) => {
         if (b.score !== a.score) return b.score - a.score;
         return a.option.distance - b.option.distance;
       });
-
-      // Vérifier si le meilleur score est significativement supérieur aux autres
+      
       const bestMatch = scoredOptions[0].option;
-      const bestScore = scoredOptions[0].score;
-      const secondBestScore =
-        scoredOptions.length > 1 ? scoredOptions[1].score : 0;
-
-      // Si la méthode par score est confiante (score élevé et écart significatif), l'utiliser directement
-      if (bestScore > 30 && bestScore > secondBestScore * 1.5) {
-        this.logger.log(
-          `Option sélectionnée par score (confiance élevée): "${bestMatch.question}" (score: ${bestScore})`,
-        );
-        return bestMatch;
-      }
-
-      // Si la méthode par score n'est pas confiante, essayer LM Studio comme dernier recours
-      // Préparer un prompt extrêmement simple pour LM Studio
-      let optionsText = '';
-      options.forEach((option, index) => {
-        optionsText += `Option ${index + 1}: ${option.question}\n`;
-      });
-
-      // Prompt très simple et direct pour LM Studio
-      const prompt = `Question: "${question}"\nOptions:\n${optionsText}\nRéponse (numéro):`;
-
-      try {
-        // Envoyer le prompt à LM Studio avec des paramètres optimisés pour une réponse courte
-        const response = await axios.post(
-          `${this.getLmStudioUrl()}/completions`,
-          {
-            prompt,
-            max_tokens: 5,
-            temperature: 0.0,
-            top_p: 1.0,
-            frequency_penalty: 0.0,
-            stop: ['\n', ' ', '.'],
-          },
-          { timeout: 5000 },
-        );
-
-        // Extraire le numéro de l'option choisie
-        const generatedText = response.data.choices[0].text.trim();
-        this.logger.log(`Réponse de LM Studio: "${generatedText}"`);
-
-        // Extraction stricte d'un numéro
-        const numericResponse = generatedText.replace(/\D/g, '');
-        if (numericResponse && numericResponse.length > 0) {
-          const selectedIndex = parseInt(numericResponse, 10) - 1;
-          if (selectedIndex >= 0 && selectedIndex < options.length) {
-            const selectedOption = options[selectedIndex];
-            this.logger.log(
-              `Option sélectionnée par LM Studio: "${selectedOption.question}"`,
-            );
-            return selectedOption;
-          }
-        }
-
-        this.logger.warn(
-          `LM Studio n'a pas retourné de numéro valide (réponse: "${generatedText}"). Utilisation de la méthode par score.`,
-        );
-      } catch (llmError) {
-        this.logger.error(
-          `Erreur lors de l'appel à LM Studio: ${llmError.message}. Utilisation de la méthode par score.`,
-        );
-      }
-
-      // Utiliser le résultat de la méthode par score comme fallback
+      
       this.logger.log(
-        `Option sélectionnée par score (fallback): "${bestMatch.question}" (score: ${bestScore})`,
+        `Option sélectionnée par score: "${bestMatch.question}" (score: ${scoredOptions[0].score.toFixed(2)}, mots communs: ${scoredOptions[0].commonWords}/${scoredOptions[0].totalWords})`,
       );
+      
+      // Log des alternatives pour diagnostic
+      if (scoredOptions.length > 1) {
+        this.logger.log(
+          `Alternatives: ${scoredOptions
+            .slice(1, 3)
+            .map(o => 
+              `"${o.option.question}" (score: ${o.score.toFixed(2)}, mots communs: ${o.commonWords}/${o.totalWords})`
+            )
+            .join(' | ')}`,
+        );
+      }
+
       return bestMatch;
     } catch (error) {
       this.logger.error(`Erreur lors de la sélection: ${error.message}`);
@@ -1023,7 +1007,10 @@ Réponds directement à la question de l'utilisateur, sans phrases d'introductio
 
       // Extraire et nettoyer le paragraphe généré
       let generatedParagraph = response.data.choices[0].text.trim();
-      generatedParagraph = this.cleanupResponse(generatedParagraph, userQuestion);
+      generatedParagraph = this.cleanupResponse(
+        generatedParagraph,
+        userQuestion,
+      );
 
       // Vérifier et corriger la réponse si nécessaire
       if (
@@ -1230,118 +1217,91 @@ Réponds directement à la question de l'utilisateur, sans phrases d'introductio
       return ''; // Renvoyer une chaîne vide pour forcer la génération d'un résumé côté frontend
     }
 
+    // Préserver les commentaires HTML invisibles de dataType
+    const dataTypeMatch = response.match(/<!--dataType:(.*?)-->/);
+    let dataType = 'Unknown';
+    if (dataTypeMatch) {
+      dataType = dataTypeMatch[1];
+    }
+
     // Enlever d'abord les guillemets qui entourent toute la réponse
     let cleaned = response.replace(/^"(.*)"$/s, '$1');
 
-    // Supprimer les doublons de phrases - étape 1: normaliser
-    const sentences = cleaned.split(/[.!?]\s+/).filter((s) => s.length > 0);
-    const uniqueSentences = [...new Set(sentences)];
-    cleaned = uniqueSentences.join('. ') + (cleaned.endsWith('.') ? '' : '.');
-
-    // Liste des patterns à supprimer
-    const patternsToRemove = [
-      // Instructions au modèle
-      /Sois (concis|précis|factuel|bref|clair|direct).*\./gi,
-      /Ne sois pas.*\./gi,
-      /Réponds.*\./gi,
-      /N'inclus pas.*\./gi,
-      /Voici.*\./gi,
-      /J'ai.*\./gi,
-      
-      // Métadiscours et réflexions
-      /Sois respectueux.*\./gi,
-      /Je dois donc structurer.*\./gi,
-      /Bon, maintenant je dois.*\./gi,
-      /Je vais donc afficher.*\./gi,
-      /D'après les données.*\./gi,
-      /Donc je vais lister.*\./gi,
-      /Ensuite j'ai à conclure.*\./gi,
-      /^(D'accord|OK|Bien|Je comprends),.*$/gim,
-      
-      // Phrases d'analyse et de réflexion
-      /Donc, si chaque client.*$/gim,
-      /^Peut-être que les données.*$/gim,
-      /^Par exemple,.*$/gim,
-      /^Si cela est le cas.*$/gim,
-      /^Aucun client ne peut.*$/gim,
-      /^Assure-toi que.*$/gim,
-      /^Cela semble bizarre.*$/gim,
-      
-      // Instructions et méta-commentaires
-      /^Tout d'abord,.*$/gim,
-      /^Ensuite,.*$/gim,
-      /^Enfin,.*$/gim,
-      /^Incluez.*$/gim,
-      /^Pour répondre à.*$/gim,
-      /^Il faut mentionner.*$/gim,
-      /^Donc, d'après.*$/gim,
-      /^Après analyse.*$/gim,
-      /^Ci-dessous.*$/gim,
-      /^Pourriez-vous me fournir.*$/gim,
-      
-      // Répétitions de la question
-      /^.*votre question.*$/gim,
-      /^.*votre demande.*$/gim,
-      /^.*la question.*$/gim,
-      
-      // Balises et styles
-      /<think>[\s\S]*?<\/think>/gi,
-      /\[.*?\]/g,
-      /\*\*(.*?)\*\*/g,
-      
-      // Préfixes et suffixes
-      /^(Réponse|RÉPONSE)\s*:/i,
-      /Taquin,.*$/gm,
-      /le \d+ \w+ 2\d{3}/g,
-      
-      // Répétition de la question originale
-      new RegExp(question.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'),
-      
-      // Phrases de réflexion en anglais et français
-      /Okay,.*$/g,
-      /^.*\b(think|First|Let|Ok|question|Looking|The|This)\b.*$/gim,
-      /^Je me demande.*$/gim,
-      /^Je me souviens.*$/gim,
-      /^Je vous (explique|informe).*$/gim,
-      
-      // Structure de données et émojis
-      /^\d+\.\s+id:.*\|.*$/gim,
-      /^Posez votre question\.\.\.$/gim,
-      /^Envoyer.*$/gim,
-      
-      // Phrases coupées ou incomplètes
-      /^Il semble que plusieurs clients.*$/gim,
-      /^En fonction des.*$/gim,
-      
-      // Emojis et champs spéciaux
-      /^👥.*$/gim,
-      /^📧.*$/gim,
-      /^📞.*$/gim,
-      /^ID:.*$/gim,
-      /^Clients$/gim,
-      /^\d+ résultats$/gim,
-      
-      // Descriptions des données
-      /^Données:$/gim,
-      /^Données disponibles:$/gim,
-      /^- Numéro du devis.*$/gim,
-      /^- Référence du devis.*$/gim,
-      /^- Date d'émission.*$/gim,
-      /^- Montant.*$/gim,
-      /^- Nom du client.*$/gim,
-      /^- Nom du projet.*$/gim,
-      /^- Numéro de téléphone.*$/gim,
-      /^- Adresse e-mail.*$/gim,
-      
-      // Problèmes spécifiques observés
-      /\(\…\)/g, // Supprime (…)
-      /Il y a\s+devis/g, // Supprime "Il y a devis"
+    // Étape 1: Supprimer les sections entières d'instructions ou de formatage (souvent entre lignes)
+    const sectionRegexps = [
+      // Instructions de formatage complètes
+      /Utilise des (tirets|points|flèches|astérisques|listes).*?structurer.*?réponse.*?\n/gs,
+      /Bon(?:nes)? (?:à savoir|pratiques).*?:\n(?:.*?\n)*?(?:\n|$)/gs,
+      /Réponse :\n(?:.*?\n)*?(?:\n|$)/gs,
+      /Final Answer:.*?\n(?:.*?\n)*?(?:\n|$)/gs,
+      /Pour exemple :.*?\n(?:.*?\n)*?(?:\n|$)/gs,
+      // Sections d'analyse des données
+      /\d+ résultats?\n(?:.*?\n)*?(?:\n|$)/gs,
+      /Clients\n(?:.*?\n)*?(?:\n|$)/gs,
+      /Planning\n(?:.*?\n)*?(?:\n|$)/gs,
+      /ID:.*?\n(?:.*?\n)*?(?:\n|$)/gs,
     ];
 
-    // Appliquer tous les patterns de nettoyage
-    patternsToRemove.forEach((pattern) => {
-      cleaned = cleaned.replace(pattern, '');
+    // Appliquer les suppressions de sections entières
+    sectionRegexps.forEach((regex) => {
+      cleaned = cleaned.replace(regex, '\n');
     });
+
+    // Supprimer les lignes avec emoji en début
+    cleaned = cleaned.replace(/^👥.*$/gm, '');
+    cleaned = cleaned.replace(/^📧.*$/gm, '');
+    cleaned = cleaned.replace(/^📞.*$/gm, '');
+    cleaned = cleaned.replace(/^📆.*$/gm, '');
+    cleaned = cleaned.replace(/^📋.*$/gm, '');
+    cleaned = cleaned.replace(/^📊.*$/gm, '');
+    cleaned = cleaned.replace(/^🧾.*$/gm, '');
+
+    // Supprimer les emojis isolés
+    cleaned = cleaned.replace(/^👥$/gm, '');
+    cleaned = cleaned.replace(/^📧$/gm, '');
+    cleaned = cleaned.replace(/^📞$/gm, '');
+    cleaned = cleaned.replace(/^📆$/gm, '');
+    cleaned = cleaned.replace(/^📋$/gm, '');
+    cleaned = cleaned.replace(/^📝.*$/gm, '');
+    cleaned = cleaned.replace(/^🔍.*$/gm, '');
+    cleaned = cleaned.replace(/^📊.*$/gm, '');
+    cleaned = cleaned.replace(/^🧾.*$/gm, '');
+    cleaned = cleaned.replace(/^🏠.*$/gm, '');
+    cleaned = cleaned.replace(/^🚧.*$/gm, '');
+    cleaned = cleaned.replace(/^🛠️.*$/gm, '');
+    cleaned = cleaned.replace(/^🔧.*$/gm, '');
+    cleaned = cleaned.replace(/^📅.*$/gm, '');
+    cleaned = cleaned.replace(/^ID:.*$/gim, '');
+    cleaned = cleaned.replace(/^Clients$/gim, '');
+    cleaned = cleaned.replace(/^Planning$/gim, '');
+    cleaned = cleaned.replace(/^Factures$/gim, '');
+    cleaned = cleaned.replace(/^Devis$/gim, '');
+    cleaned = cleaned.replace(/^Projets$/gim, '');
+    cleaned = cleaned.replace(/^\d+ résultats?$/gim, '');
+
+    // Descriptions des données
+    cleaned = cleaned.replace(/^Données:$/gim, '');
+    cleaned = cleaned.replace(/^Données disponibles:$/gim, '');
+    cleaned = cleaned.replace(/^- Numéro du devis.*$/gim, '');
+    cleaned = cleaned.replace(/^- Référence du devis.*$/gim, '');
+    cleaned = cleaned.replace(/^- Date d'émission.*$/gim, '');
+    cleaned = cleaned.replace(/^- Montant.*$/gim, '');
+    cleaned = cleaned.replace(/^- Nom du client.*$/gim, '');
+    cleaned = cleaned.replace(/^- Nom du projet.*$/gim, '');
+    cleaned = cleaned.replace(/^- Numéro de téléphone.*$/gim, '');
+    cleaned = cleaned.replace(/^- Adresse e-mail.*$/gim, '');
+
+    // Lignées de données brutes
+    cleaned = cleaned.replace(/^firstname:.*$/gim, '');
+    cleaned = cleaned.replace(/^lastname:.*$/gim, '');
+    cleaned = cleaned.replace(/^role:.*$/gim, '');
+    cleaned = cleaned.replace(/^days worked:.*$/gim, '');
+    cleaned = cleaned.replace(/^total hours:.*$/gim, '');
+    cleaned = cleaned.replace(/^0 projet actif$/gim, '');
+
+    // Problèmes spécifiques observés
+    cleaned = cleaned.replace(/\(…\)/g, ''); // Supprime (…)
+    cleaned = cleaned.replace(/Il y a\s+devis/g, ''); // Supprime "Il y a devis"
 
     // Nettoyer les phrases de type analytique
     const phrasesToClean = [
@@ -1362,9 +1322,13 @@ Réponds directement à la question de l'utilisateur, sans phrases d'introductio
 
     // Correction des problèmes courants dans les réponses numériques
     cleaned = cleaned
-      .replace(/Il y a (\d+)\s*\(\…\)\s*devis/gi, 'Il y a $1 devis')
+      .replace(/Il y a (\d+)\s*\(…\)\s*devis/gi, 'Il y a $1 devis')
       .replace(/Il y a\s+devis/gi, '')
-      .replace(/\b(\d+)\s*\(\…\)\s*/g, '$1 ');
+      .replace(/\b(\d+)\s*\(…\)\s*/g, '$1 ')
+      // Corriger les phrases incomplètes
+      .replace(/Il y a (\d+)\s*$/gi, 'Il y a $1 résultats.')
+      .replace(/Il y a projet/gi, 'Il y a 1 projet')
+      .replace(/Il y a client/gi, 'Il y a 1 client');
 
     // Supprimer les répétitions
     cleaned = cleaned.replace(/(.*?)\. \1\.?/gi, '$1.');
@@ -1372,38 +1336,88 @@ Réponds directement à la question de l'utilisateur, sans phrases d'introductio
     // Supprimer les lignes vides multiples et nettoyer
     cleaned = cleaned.replace(/\n{2,}/g, '\n');
     cleaned = cleaned.replace(/^[\s\-_*]+$/gm, '');
-    cleaned = cleaned.replace(/^(👥|📧|📞)$/gmu, '');
-    cleaned = cleaned.replace(/^ID:.*$/gim, '');
 
     // Mettre en forme les nombres dans le texte
     cleaned = cleaned.replace(/(\d+)(\d{3})/g, '$1 $2');
-    
+
     // Remplacer les espaces multiples par un seul espace
     cleaned = cleaned.replace(/\s{2,}/g, ' ');
-    
-    // S'assurer que la réponse contient quelque chose d'utile 
-    // et si elle est trop courte, générer une réponse par défaut
+
+    // Vérifier les incohérences
+    if (cleaned.includes(' projet') && !cleaned.match(/\d+ projet/)) {
+      cleaned = cleaned.replace(/projet/, '1 projet');
+    }
+    if (cleaned.includes(' devis') && !cleaned.match(/\d+ devis/)) {
+      cleaned = cleaned.replace(/devis/, '1 devis');
+    }
+
+    // Détecter les réponses tronquées et les corriger
+    cleaned = cleaned
+      .replace(/Il y a\s*\.\s*$/, 'Il y a des résultats.')
+      .replace(/Il y a\s*$/, 'Il y a des résultats.')
+      .replace(/^[^a-zA-Z0-9]+$/, ''); // Supprimer les lignes qui ne contiennent que des caractères spéciaux
+
+    // S'assurer que la réponse contient quelque chose d'utile
+    // et si elle est trop courte ou vide après nettoyage, générer une réponse par défaut
     if (cleaned.trim().length < 5) {
-      if (dataType === 'Quotation' || question.toLowerCase().includes('devis')) {
+      if (
+        dataType === 'Quotation' ||
+        question.toLowerCase().includes('devis')
+      ) {
         cleaned = 'Il y a 1 devis en attente.';
+      } else if (
+        dataType === 'Planning' ||
+        question.toLowerCase().includes('travail')
+      ) {
+        cleaned = "Aucun employé n'a travaillé sur cette période.";
+      } else if (
+        dataType === 'Project' ||
+        question.toLowerCase().includes('projet') ||
+        question.toLowerCase().includes('chantier')
+      ) {
+        cleaned = "Il n'y a aucun projet correspondant à votre recherche.";
+      } else if (
+        dataType === 'Customer' ||
+        question.toLowerCase().includes('client')
+      ) {
+        cleaned = 'Aucun client ne correspond à votre recherche.';
+      } else if (
+        dataType === 'Invoice' ||
+        question.toLowerCase().includes('facture')
+      ) {
+        cleaned = 'Aucune facture ne correspond à votre recherche.';
       } else {
         cleaned = 'Voici les résultats de votre recherche.';
       }
     }
 
-    // Préserver les commentaires HTML invisibles de dataType
-    const dataTypeMatch = response.match(/<!--dataType:(.*?)-->/);
-    let dataType = 'Unknown';
+    // Vérification finale de cohérence
+    if (cleaned.trim().match(/^[^a-zA-Z0-9]*$/)) {
+      // Si la réponse ne contient aucun caractère alphanumérique, la remplacer
+      cleaned = 'Aucun résultat trouvé pour votre recherche.';
+    }
+
+    // Ajouter le dataType à la réponse
     if (dataTypeMatch) {
-      dataType = dataTypeMatch[1];
-      cleaned = `${cleaned.trim()}\n<!--dataType:${dataTypeMatch[1]}-->`;
+      cleaned = `${cleaned.trim()}\n<!--dataType:${dataType}-->`;
     }
 
     // Correction du dataType si nécessaire
     if (question.toLowerCase().includes('devis') && dataType === 'Customer') {
-      cleaned = cleaned.replace(/<!--dataType:Customer-->/, '<!--dataType:Quotation-->');
+      cleaned = cleaned.replace(
+        /<!--dataType:Customer-->/,
+        '<!--dataType:Quotation-->',
+      );
+    } else if (
+      question.toLowerCase().includes('travail') &&
+      dataType === 'Customer'
+    ) {
+      cleaned = cleaned.replace(
+        /<!--dataType:Customer-->/,
+        '<!--dataType:Planning-->',
+      );
     }
-    
+
     return cleaned.trim();
   }
 

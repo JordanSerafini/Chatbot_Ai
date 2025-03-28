@@ -60,22 +60,63 @@ export class AnalyseService {
 
   private async reformulateQuestion(question: string): Promise<string> {
     try {
+      // Vérification rapide pour les patterns courants - évite d'appeler l'IA pour des cas simples
+      const questionLower = question.toLowerCase().trim();
+
+      // Cas spécifiques pour les références temporelles
+      if (questionLower.includes('cette année')) {
+        return question; // Préserver la question originale avec "cette année"
+      }
+
+      if (questionLower.includes('année') || questionLower.includes('an')) {
+        if (
+          questionLower.includes('devis') ||
+          questionLower.includes('facture')
+        ) {
+          return `Quel est le total cumulé des ${questionLower.includes('devis') ? 'devis' : 'factures'} de cette année ?`;
+        }
+      }
+
+      // Cas spécifiques pour les chantiers et la semaine prochaine
+      if (
+        questionLower.includes('semaine pro') ||
+        questionLower.includes('semaine prochaine')
+      ) {
+        if (questionLower.includes('chantier')) {
+          return 'Quels sont les chantiers prévus pour la semaine prochaine ?';
+        }
+        if (
+          questionLower.includes('travail') ||
+          questionLower.includes('travaux')
+        ) {
+          return 'Quels sont les travaux prévus pour la semaine prochaine ?';
+        }
+        if (questionLower.includes('qui')) {
+          return 'Qui travaille la semaine prochaine ?';
+        }
+      }
+
       // Création du prompt pour l'IA de reformulation
-      const prompt = `Tu es un expert en correction orthographique et grammaticale du français.
+      const prompt = `Tu es un expert en correction orthographique et grammaticale du français dans le contexte du BTP.
       
 Ta tâche est de reformuler cette question: "${question}"
 
 INSTRUCTIONS IMPORTANTES:
 1. Corrige toutes les fautes d'orthographe et de grammaire
 2. Utilise un français correct et standard
-3. Préserve exactement le sens original de la question
+3. Préserve EXACTEMENT le sens original de la question
 4. Ne change PAS le sujet ou l'intention de la question
-5. Retourne UNIQUEMENT la question reformulée, sans aucune explication, réflexion ou texte additionnel
-6. N'inclus PAS de balises comme <think> ou des explications sur ton processus de réflexion
+5. Si la question mentionne "cette année", "l'année en cours", ou "l'année actuelle", CONSERVE EXACTEMENT cette référence temporelle
+6. Si la question mentionne "mois", "semaine", "trimestre", conserve EXACTEMENT la période mentionnée
+7. Si la question porte sur des chantiers ou des projets, conserve ces termes exacts
+8. Retourne UNIQUEMENT la question reformulée, sans aucune explication
+9. Ne modifie JAMAIS le contexte temporel de la question
 
-Exemple:
-Si la question est "kel son le client ke je doi voir demain", tu répondrais simplement:
-"Quels sont les clients que je dois voir demain ?"`;
+Exemples:
+- "kel chantier la semaine pro" → "Quels chantiers sont prévus la semaine prochaine ?"
+- "qui travail semaine prochaine" → "Qui travaille la semaine prochaine ?"
+- "clients avec projets en cours" → "Quels sont les clients avec des projets en cours ?"
+- "total des devis cette année" → "Quel est le total des devis cette année ?"`;
 
       // Appel à l'IA (LM Studio) pour la reformulation
       const lmStudioUrl = this.getLmStudioUrl();
@@ -87,8 +128,8 @@ Si la question est "kel son le client ke je doi voir demain", tu répondrais sim
         lmStudioUrl + chatEndpoint,
         {
           messages: [{ role: 'user', content: prompt }],
-          temperature: 0.3, // Température plus basse pour plus de précision
-          max_tokens: 1000,
+          temperature: 0.1,
+          max_tokens: 150,
         },
       );
 
@@ -130,6 +171,66 @@ Si la question est "kel son le client ke je doi voir demain", tu répondrais sim
           '',
         )
         .trim();
+
+      // Vérification de cohérence - si la reformulation semble avoir perdu l'intention
+      const originalHasYear =
+        questionLower.includes('cette année') ||
+        questionLower.includes('annee') ||
+        questionLower.includes('année');
+      const reformulatedHasYear =
+        reformulatedQuestion.toLowerCase().includes('année') ||
+        reformulatedQuestion.toLowerCase().includes('an') ||
+        reformulatedQuestion.toLowerCase().includes('cette année');
+
+      if (originalHasYear && !reformulatedHasYear) {
+        // La référence à l'année a été perdue, on revient à la question originale
+        console.log(
+          "Reformulation a perdu la référence à l'année, retour à l'original",
+        );
+        return question;
+      }
+
+      // Vérification pour les références au mois
+      const originalHasMonth =
+        questionLower.includes('ce mois') ||
+        questionLower.includes('mois en cours') ||
+        questionLower.includes('mois actuel');
+      const reformulatedHasMonth = reformulatedQuestion
+        .toLowerCase()
+        .includes('mois');
+
+      if (originalHasMonth && !reformulatedHasMonth) {
+        console.log(
+          "Reformulation a perdu la référence au mois, retour à l'original",
+        );
+        return question;
+      }
+
+      // Vérification pour les chantiers
+      const originalHasChantier = questionLower.includes('chantier');
+      const reformulatedHasChantier = reformulatedQuestion
+        .toLowerCase()
+        .includes('chantier');
+
+      if (originalHasChantier && !reformulatedHasChantier) {
+        // La référence au chantier a été perdue, on revient à la question originale
+        console.log(
+          "Reformulation a perdu la référence au chantier, retour à l'original",
+        );
+        return question;
+      }
+
+      // Si la question originale mentionne "cette année" mais a été reformulée avec "mois", corriger
+      if (
+        questionLower.includes('cette année') &&
+        reformulatedQuestion.toLowerCase().includes('ce mois')
+      ) {
+        reformulatedQuestion = reformulatedQuestion
+          .toLowerCase()
+          .replace('ce mois', 'cette année')
+          .replace('mois en cours', 'cette année')
+          .replace('mois actuel', 'cette année');
+      }
 
       return reformulatedQuestion;
     } catch (error) {

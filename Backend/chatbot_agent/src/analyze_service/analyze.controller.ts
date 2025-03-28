@@ -27,7 +27,7 @@ export class AnalyseController {
       this.logger.log(
         `Résultat de l'analyse: ${JSON.stringify(analysisResult)}`,
       );
-      
+
       // Réponse simplifiée
       return {
         original: body.question,
