@@ -23,6 +23,7 @@ interface RagResponse {
     question: string;
     distance: number;
     parameters?: any[];
+    extractedParams: { [key: string]: string };
   };
   otherQueries: {
     sql: string;
@@ -139,17 +140,167 @@ export class ModelService {
       .normalize('NFD')
       .replace(/[\u0300-\u036f]/g, '');
 
+    this.logger.log(
+      `Extraction des paramètres pour la question: "${question}"`,
+    );
+    this.logger.log(`Paramètres attendus: ${JSON.stringify(parameters)}`);
+
     parameters.forEach((param) => {
       const paramName = param.name;
       let paramValue: string | undefined;
 
       switch (paramName) {
+        case 'CITY': {
+          // Rechercher le nom de la ville
+          // Différents patterns possibles : "à Paris", "de Lyon", "sur Bordeaux", etc.
+          const cityPatterns = [
+            /(?:a|à|de|dans|en|sur|pour)\s+([a-z\s-]{2,}?)(?:\s|$|\?|\.)/i,
+            /(?:ville|city|location)\s+(?:de|d'|du)?\s*([a-z\s-]{2,}?)(?:\s|$|\?|\.)/i,
+          ];
+
+          for (const pattern of cityPatterns) {
+            const cityMatches = normalizedQuestion.match(pattern);
+            if (cityMatches && cityMatches[1]) {
+              paramValue = cityMatches[1].trim();
+              break;
+            }
+          }
+
+          // Si aucun pattern ne correspond, chercher directement des noms de villes connus
+          if (!paramValue) {
+            const knownCities = [
+              'paris',
+              'lyon',
+              'marseille',
+              'bordeaux',
+              'lille',
+              'nantes',
+              'toulouse',
+              'strasbourg',
+              'montpellier',
+              'nice',
+            ];
+            for (const city of knownCities) {
+              if (normalizedQuestion.includes(city)) {
+                paramValue = city;
+                break;
+              }
+            }
+          }
+
+          break;
+        }
         case 'CLIENT': {
-          const clientMatches = normalizedQuestion.match(
-            /(?:client|pour|de)\s+([a-z\s]+?)(?:\s|$)/i,
+          // Détecter directement les noms propres au format "Prénom Nom"
+          const fullNameMatches = question.match(
+            /(\b[A-Z][a-zé]+ [A-Z][a-zé]+\b)/g,
           );
-          if (clientMatches) {
-            paramValue = clientMatches[1].trim();
+          if (fullNameMatches && fullNameMatches.length > 0) {
+            paramValue = fullNameMatches[0].trim();
+            this.logger.log(
+              `Nom complet détecté dans la question: "${paramValue}"`,
+            );
+            break;
+          }
+
+          // Rechercher le nom du client avec différents patterns
+          const clientPatterns = [
+            /(?:client|pour|de)\s+([A-Za-zÀ-ÖØ-öø-ÿ\s-]{2,}?)(?:\s|$|\?|\.)/i,
+            /(?:mr|m\.|monsieur|mme|madame|ms)\s+([A-Za-zÀ-ÖØ-öø-ÿ\s-]{2,}?)(?:\s|$|\?|\.)/i,
+          ];
+
+          // Extraire les noms propres potentiels
+          const nameExtractionPattern =
+            /([A-ZÀ-Ö][a-zà-öø-ÿ]+(?:\s+[A-ZÀ-Ö][a-zà-öø-ÿ]+)+)/g;
+          const potentialNames = question.match(nameExtractionPattern);
+
+          // D'abord essayer les patterns spécifiques
+          for (const pattern of clientPatterns) {
+            const clientMatches = question.match(pattern);
+            if (clientMatches && clientMatches[1]) {
+              paramValue = clientMatches[1].trim();
+              this.logger.log(`Client détecté via pattern: "${paramValue}"`);
+              break;
+            }
+          }
+
+          // Si aucun pattern ne correspond mais on a trouvé des noms propres
+          if (!paramValue && potentialNames && potentialNames.length > 0) {
+            // Prendre le nom propre le plus long
+            paramValue = potentialNames
+              .sort((a, b) => b.length - a.length)[0]
+              .trim();
+            this.logger.log(`Client détecté via nom propre: "${paramValue}"`);
+          }
+
+          // Vérifier si nous avons trouvé "quel projets" ou une partie de la question comme client
+          // (cas d'erreur fréquent)
+          if (
+            paramValue &&
+            (paramValue.toLowerCase().includes('quel') ||
+              paramValue.toLowerCase().includes('projet') ||
+              paramValue.toLowerCase() === normalizedQuestion)
+          ) {
+            // Dans ce cas, chercher un vrai nom propre dans la question
+            const betterNameMatches = question.match(
+              /([A-ZÀ-Ö][a-zà-öø-ÿ]+\s+[A-ZÀ-Ö][a-zà-öø-ÿ]+)/g,
+            );
+            if (betterNameMatches && betterNameMatches.length > 0) {
+              paramValue = betterNameMatches[0].trim();
+              this.logger.log(`Correction du client erroné: "${paramValue}"`);
+            }
+          }
+
+          break;
+        }
+        case 'MONTH': {
+          // Rechercher le mois
+          const monthNames = {
+            janvier: '01',
+            fevrier: '02',
+            mars: '03',
+            avril: '04',
+            mai: '05',
+            juin: '06',
+            juillet: '07',
+            aout: '08',
+            septembre: '09',
+            octobre: '10',
+            novembre: '11',
+            decembre: '12',
+          };
+
+          for (const [month, value] of Object.entries(monthNames)) {
+            if (normalizedQuestion.includes(month)) {
+              paramValue = value;
+              break;
+            }
+          }
+
+          // Vérifier si on parle du mois courant
+          if (
+            !paramValue &&
+            (normalizedQuestion.includes('ce mois') ||
+              normalizedQuestion.includes('mois en cours') ||
+              normalizedQuestion.includes('mois actuel'))
+          ) {
+            const currentDate = new Date();
+            paramValue = String(currentDate.getMonth() + 1).padStart(2, '0');
+          }
+          break;
+        }
+        case 'STAFF': {
+          // Rechercher le nom du staff
+          const staffPatterns = [
+            /(?:staff|personnel|employe|employé|technicien|ouvrier)\s+([a-z\s-]{2,}?)(?:\s|$|\?|\.)/i,
+          ];
+
+          for (const pattern of staffPatterns) {
+            const staffMatches = normalizedQuestion.match(pattern);
+            if (staffMatches && staffMatches[1]) {
+              paramValue = staffMatches[1].trim();
+              break;
+            }
           }
           break;
         }
@@ -181,14 +332,16 @@ export class ModelService {
         }
         case 'STATUS': {
           const statusMatches = normalizedQuestion.match(
-            /\b(brouillon|envoyee?|payee?|en[_\s]retard|annulee?)\b/i,
+            /\b(brouillon|envoyee?|payee?|en[_\s]retard|annulee?|en cours|terminé|termine|accepté|accepte)\b/i,
           );
           if (statusMatches) {
             paramValue = statusMatches[1]
               .toLowerCase()
               .replace('envoyee', 'envoyée')
               .replace('payee', 'payée')
-              .replace('annulee', 'annulée');
+              .replace('annulee', 'annulée')
+              .replace('termine', 'terminé')
+              .replace('accepte', 'accepté');
           }
           break;
         }
@@ -251,6 +404,9 @@ export class ModelService {
 
       if (paramValue) {
         extractedParams[paramName] = paramValue;
+        this.logger.log(`Paramètre extrait: ${paramName} = ${paramValue}`);
+      } else {
+        this.logger.warn(`Paramètre ${paramName} non trouvé dans la question`);
       }
     });
 
@@ -265,9 +421,42 @@ export class ModelService {
 
     Object.entries(params).forEach(([key, value]) => {
       const paramRegex = new RegExp(`\\[${key}\\]`, 'g');
-      modifiedSql = modifiedSql.replace(paramRegex, value);
+      // Adapter la valeur pour la requête SQL
+      let sqlValue = value;
+
+      // Si c'est un CLIENT, s'assurer que les caractères spéciaux sont gérés
+      if (key === 'CLIENT') {
+        // Échapper les apostrophes pour SQL
+        sqlValue = value.replace(/'/g, "''");
+
+        // Vérifier si le nom du client est peut-être détecté à partir de la question
+        if (
+          value.toLowerCase().includes('quel') ||
+          value.toLowerCase().includes('projet')
+        ) {
+          // Essayer de trouver un meilleur nom dans la requête SQL
+          const originalQuery = sql;
+          const nameMatches = originalQuery.match(/ILIKE '%([^%]+)%'/);
+          if (
+            nameMatches &&
+            nameMatches[1] &&
+            !nameMatches[1].toLowerCase().includes('quel')
+          ) {
+            sqlValue = nameMatches[1];
+            this.logger.log(
+              `Remplacement du client: "${value}" par "${sqlValue}" pour la requête SQL`,
+            );
+          }
+        }
+      }
+
+      modifiedSql = modifiedSql.replace(paramRegex, sqlValue);
+      this.logger.log(
+        `Remplacé [${key}] par "${sqlValue}" dans la requête SQL`,
+      );
     });
 
+    this.logger.log(`Requête SQL modifiée: ${modifiedSql}`);
     return modifiedSql;
   }
 
@@ -315,6 +504,8 @@ export class ModelService {
             description: '',
             question: '',
             distance: 0,
+            parameters: [],
+            extractedParams: {},
           },
           otherQueries: [],
         };
@@ -358,6 +549,7 @@ export class ModelService {
           question: bestMatch.question,
           distance: bestMatch.distance,
           parameters: bestMatch.metadata.parameters || [],
+          extractedParams: extractedParams,
         },
         otherQueries: otherQueriesDetails,
       };
@@ -369,6 +561,8 @@ export class ModelService {
           description: '',
           question: '',
           distance: 0,
+          parameters: [],
+          extractedParams: {},
         },
         otherQueries: [],
       };
@@ -757,49 +951,225 @@ export class ModelService {
         .replace(/[\u0300-\u036f]/g, '')
         .trim();
 
-      // Détection spécifique pour les références temporelles
-      const hasYear = normalizedQuestion.includes('annee') || 
-                     normalizedQuestion.includes('année') || 
-                     normalizedQuestion.includes('cette année') ||
-                     normalizedQuestion.includes('annuel');
-                     
-      const hasMonth = normalizedQuestion.includes('mois') || 
-                      normalizedQuestion.includes('ce mois') || 
-                      normalizedQuestion.includes('mois en cours');
-                      
-      const hasWeek = normalizedQuestion.includes('semaine') || 
-                     normalizedQuestion.includes('cette semaine');
+      // Détection spécifique pour les devis
+      const devisKeywords = [
+        'devis',
+        'offre',
+        'proposition',
+        'cotation',
+        'estimation',
+      ];
+      const hasDevisKeywords = devisKeywords.some((keyword) =>
+        normalizedQuestion.includes(keyword),
+      );
 
-      // 1. Recherche directe d'options contenant les mêmes références temporelles
-      const temporalMatches = options.filter(option => {
-        const normalizedOption = option.question
-          .toLowerCase()
-          .normalize('NFD')
-          .replace(/[\u0300-\u036f]/g, '')
-          .trim();
-          
-        if (hasYear && normalizedOption.includes('année')) return true;
-        if (hasMonth && normalizedOption.includes('mois')) return true;
-        if (hasWeek && normalizedOption.includes('semaine')) return true;
-        
-        return false;
-      });
-      
-      // Si on trouve des correspondances temporelles exactes, on priorise celles-ci
-      if (temporalMatches.length > 0) {
-        // Trier par distance pour prendre la plus proche
-        temporalMatches.sort((a, b) => a.distance - b.distance);
-        const bestTemporalMatch = temporalMatches[0];
-        
-        this.logger.log(
-          `Option sélectionnée par correspondance temporelle: "${bestTemporalMatch.question}" (distance: ${bestTemporalMatch.distance})`,
-        );
-        
-        return bestTemporalMatch;
+      // Détection des statuts de devis
+      const statusPatterns = {
+        en_attente: [
+          'en attente',
+          'attente',
+          'non decides',
+          'non valides',
+          'a valider',
+          'sans reponse',
+        ],
+        accepté: [
+          'accepte',
+          'acceptes',
+          'valide',
+          'valides',
+          'approuve',
+          'approuves',
+          'valides',
+          'validés',
+          'validation',
+        ],
+        refusé: [
+          'refuse',
+          'refuses',
+          'rejete',
+          'rejetes',
+          'non retenus',
+          'non acceptes',
+        ],
+      };
+
+      let detectedStatus = '';
+      if (hasDevisKeywords) {
+        for (const [status, patterns] of Object.entries(statusPatterns)) {
+          if (
+            patterns.some((pattern) => normalizedQuestion.includes(pattern))
+          ) {
+            detectedStatus = status;
+            this.logger.log(`Statut de devis détecté: "${detectedStatus}"`);
+            break;
+          }
+        }
       }
-      
-      // 2. Si aucune correspondance temporelle, utiliser la méthode par score de mots
-      const scoredOptions = options.map(option => {
+
+      // Recherche spécifique pour devis par statut
+      if (hasDevisKeywords) {
+        // Priorité 1: Si un statut est explicitement détecté, chercher une requête exacte
+        if (detectedStatus) {
+          const devisStatusOption = options.find(
+            (option) =>
+              option.question.toLowerCase().includes('devis') &&
+              (option.question.toLowerCase().includes('[status]') ||
+                option.question.toLowerCase().includes(detectedStatus)) &&
+              option.metadata.sql.toLowerCase().includes(detectedStatus),
+          );
+
+          if (devisStatusOption) {
+            this.logger.log(
+              `Option sélectionnée pour les devis avec statut ${detectedStatus}: "${devisStatusOption.question}"`,
+            );
+            return devisStatusOption;
+          }
+        }
+
+        // Priorité 2: Recherche plus générale pour tout type de devis par statut
+        const devisStatusOptions = options.filter(
+          (option) =>
+            option.question.toLowerCase().includes('devis') &&
+            (option.question.toLowerCase().includes('sont') ||
+              option.question.toLowerCase().includes('statut') ||
+              option.question.toLowerCase().includes('[status]')),
+        );
+
+        // Si nous avons un statut implicite mais pas de statut détecté (ex: "devis validés")
+        if (devisStatusOptions.length > 0) {
+          // Chercher le statut dans la question originale, car les mots clés comme "validés"
+          // peuvent être considérés comme des statuts implicites
+          if (!detectedStatus) {
+            if (
+              normalizedQuestion.includes('valide') ||
+              normalizedQuestion.includes('accepte')
+            ) {
+              detectedStatus = 'accepté';
+            } else if (
+              normalizedQuestion.includes('refuse') ||
+              normalizedQuestion.includes('rejete')
+            ) {
+              detectedStatus = 'refusé';
+            } else if (normalizedQuestion.includes('attente')) {
+              detectedStatus = 'en_attente';
+            }
+          }
+
+          // Si un statut est maintenant détecté, utiliser l'option correspondante
+          if (detectedStatus) {
+            const matchingOption = devisStatusOptions.find((option) =>
+              option.metadata.sql.toLowerCase().includes(detectedStatus),
+            );
+            if (matchingOption) {
+              this.logger.log(
+                `Option sélectionnée pour les devis au statut "${detectedStatus}": "${matchingOption.question}"`,
+              );
+              return matchingOption;
+            }
+          }
+
+          // Si toujours pas de correspondance, prendre la première option des devis par statut
+          this.logger.log(
+            `Option sélectionnée par défaut pour les devis par statut: "${devisStatusOptions[0].question}"`,
+          );
+          return devisStatusOptions[0];
+        }
+      }
+
+      // Extraire le client mentionné dans la question
+      let clientName = '';
+      // Patterns pour détecter un client dans différents contextes
+      const clientPatterns = [
+        /(?:client|pour|de)\s+([A-Za-zÀ-ÖØ-öø-ÿ\s-]{2,}?)(?:\s|$|\?|\.)/i,
+        /au\s+client\s+([A-Za-zÀ-ÖØ-öø-ÿ\s-]{2,}?)(?:\s|$|\?|\.)/i,
+        /du\s+client\s+([A-Za-zÀ-ÖØ-öø-ÿ\s-]{2,}?)(?:\s|$|\?|\.)/i,
+      ];
+
+      for (const pattern of clientPatterns) {
+        const clientMatches = question.match(pattern);
+        if (clientMatches && clientMatches[1]) {
+          clientName = clientMatches[1].trim();
+          this.logger.log(`Client détecté dans la question: "${clientName}"`);
+          break;
+        }
+      }
+
+      // Recherche spécifique pour devis d'un client
+      if (hasDevisKeywords && clientName) {
+        const devisClientOption = options.find(
+          (option) =>
+            option.question.toLowerCase().includes('devis') &&
+            option.question.toLowerCase().includes('[client]') &&
+            option.metadata.sql.toLowerCase().includes('client'),
+        );
+
+        if (devisClientOption) {
+          this.logger.log(
+            `Option sélectionnée pour les devis d'un client: "${devisClientOption.question}"`,
+          );
+          return devisClientOption;
+        }
+      }
+
+      // Détection spécifique pour les projets par ville
+      // Patterns pour détecter des villes dans différents contextes
+      const cityPatterns = [
+        /(?:a|à|de|dans|en|sur|pour)\s+([a-z\s-]{2,}?)(?:\s|$|\?|\.)/i,
+        /(?:ville|city|location)\s+(?:de|d'|du)?\s*([a-z\s-]{2,}?)(?:\s|$|\?|\.)/i,
+        /dans\s+la\s+ville\s+(?:de\s+)?([a-z\s-]{2,}?)(?:\s|$|\?|\.)/i,
+        /(?:projet|chantier|travaux).*?(?:a|à|en|dans)\s+([a-z\s-]{2,}?)(?:\s|$|\?|\.)/i,
+      ];
+
+      let cityMentioned = '';
+      for (const pattern of cityPatterns) {
+        const cityMatches = question.match(pattern);
+        if (cityMatches && cityMatches[1]) {
+          cityMentioned = cityMatches[1].trim();
+          this.logger.log(
+            `Ville détectée dans la question: "${cityMentioned}"`,
+          );
+          break;
+        }
+      }
+
+      // Détection explicite pour "ville de paris" et variations
+      if (!cityMentioned) {
+        if (
+          normalizedQuestion.includes('ville de paris') ||
+          normalizedQuestion.includes('ville de  paris') ||
+          normalizedQuestion.includes('paris')
+        ) {
+          cityMentioned = 'paris';
+          this.logger.log(
+            `Ville de Paris détectée dans la question par recherche explicite`,
+          );
+        }
+      }
+
+      // Recherche spécifique pour projets par ville
+      if (
+        cityMentioned ||
+        normalizedQuestion.includes('ville') ||
+        normalizedQuestion.match(/projets? (a|à|dans|en) [a-z]+/i)
+      ) {
+        // Chercher la requête correspondant aux projets par ville
+        const cityProjectOption = options.find(
+          (option) =>
+            option.question.includes('[CITY]') &&
+            option.metadata.sql.toLowerCase().includes('city'),
+        );
+
+        if (cityProjectOption) {
+          this.logger.log(
+            `Option sélectionnée pour les projets dans une ville: "${cityProjectOption.question}"`,
+          );
+          return cityProjectOption;
+        }
+      }
+
+      // 2. Si aucune correspondance directe, utiliser la méthode par score de mots
+      const scoredOptions = options.map((option) => {
         const normalizedOptionQuestion = option.question
           .toLowerCase()
           .normalize('NFD')
@@ -809,38 +1179,77 @@ export class ModelService {
         // Score basé sur les mots communs
         const questionWords = normalizedQuestion
           .split(/\s+/)
-          .filter(word => word.length > 2);
-          
+          .filter((word) => word.length > 2);
+
         const optionWords = normalizedOptionQuestion
           .split(/\s+/)
-          .filter(word => word.length > 2);
-        
+          .filter((word) => word.length > 2);
+
         // Calculer le pourcentage de mots communs
-        const commonWords = questionWords.filter(word => 
-          optionWords.includes(word)
+        const commonWords = questionWords.filter((word) =>
+          optionWords.includes(word),
         );
-        
-        const percentageMatch = questionWords.length > 0
-          ? (commonWords.length / questionWords.length) * 100
-          : 0;
-        
+
+        const percentageMatch =
+          questionWords.length > 0
+            ? (commonWords.length / questionWords.length) * 100
+            : 0;
+
         // Score initial basé sur le pourcentage de correspondance
         let score = percentageMatch;
-        
-        // Pénalités pour les incohérences temporelles
-        if (hasYear && !normalizedOptionQuestion.includes('année') && normalizedOptionQuestion.includes('mois')) {
+
+        // Bonus pour les devis quand la question mentionne un devis
+        if (hasDevisKeywords && normalizedOptionQuestion.includes('devis')) {
+          score += 40;
+
+          // Bonus supplémentaire si le statut correspond
+          if (
+            detectedStatus &&
+            option.metadata.sql.toLowerCase().includes(detectedStatus)
+          ) {
+            score += 60;
+            this.logger.log(
+              `Bonus important appliqué pour correspondance de statut de devis: ${detectedStatus}`,
+            );
+          }
+
+          // Bonus pour les devis d'un client spécifique
+          if (clientName && option.question.includes('[CLIENT]')) {
+            score += 70;
+            this.logger.log(
+              `Bonus majeur appliqué pour devis de client spécifique: ${clientName}`,
+            );
+          }
+        }
+
+        // Bonus pour les requêtes de ville
+        if (
+          cityMentioned &&
+          option.question.includes('[CITY]') &&
+          option.metadata.sql.toLowerCase().includes('city')
+        ) {
+          score += 100;
+          this.logger.log(
+            `Bonus MAJEUR appliqué pour la requête de projets par ville`,
+          );
+        }
+
+        // Pénalités pour les requêtes de client quand on cherche par ville
+        if (
+          (normalizedQuestion.includes('ville') || cityMentioned) &&
+          option.question.includes('[CLIENT]')
+        ) {
           score -= 50;
+          this.logger.log(
+            `Pénalité appliquée pour requête client inappropriée`,
+          );
         }
-        
-        if (hasMonth && !normalizedOptionQuestion.includes('mois') && normalizedOptionQuestion.includes('année')) {
-          score -= 30;
-        }
-        
+
         // Bonus pour distance faible
         if (option.distance < 0.3) {
           score += 20;
         }
-        
+
         return {
           option,
           score,
@@ -848,26 +1257,27 @@ export class ModelService {
           totalWords: questionWords.length,
         };
       });
-      
+
       // Trier par score
       scoredOptions.sort((a, b) => {
         if (b.score !== a.score) return b.score - a.score;
         return a.option.distance - b.option.distance;
       });
-      
+
       const bestMatch = scoredOptions[0].option;
-      
+
       this.logger.log(
         `Option sélectionnée par score: "${bestMatch.question}" (score: ${scoredOptions[0].score.toFixed(2)}, mots communs: ${scoredOptions[0].commonWords}/${scoredOptions[0].totalWords})`,
       );
-      
+
       // Log des alternatives pour diagnostic
       if (scoredOptions.length > 1) {
         this.logger.log(
           `Alternatives: ${scoredOptions
             .slice(1, 3)
-            .map(o => 
-              `"${o.option.question}" (score: ${o.score.toFixed(2)}, mots communs: ${o.commonWords}/${o.totalWords})`
+            .map(
+              (o) =>
+                `"${o.option.question}" (score: ${o.score.toFixed(2)}, mots communs: ${o.commonWords}/${o.totalWords})`,
             )
             .join(' | ')}`,
         );

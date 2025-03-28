@@ -523,6 +523,244 @@
       ],
       "sql": "SELECT i.id, i.reference, i.issue_date, i.due_date, i.total_ttc, pay.payment_date, (pay.payment_date - i.due_date) AS days_late, c.firstname || ' ' || c.lastname AS client_name, p.name AS project_name FROM invoices i JOIN projects p ON i.project_id = p.id JOIN clients c ON p.client_id = c.id JOIN payments pay ON i.id = pay.invoice_id JOIN ref_status rs ON i.status = rs.id WHERE pay.payment_date > i.due_date AND rs.code = 'payée' ORDER BY days_late DESC",
       "description": "Liste des factures qui ont été payées après la date d'échéance, avec le nombre de jours de retard"
+    },
+    {
+      "id": "invoices_with_discounts",
+      "questions": [
+        "Quelles factures ont des remises ?",
+        "Liste des factures avec réduction",
+        "Factures bénéficiant d'une remise",
+        "Factures avec remise appliquée",
+        "Où y a-t-il eu des remises ?",
+        "Réduction appliquée sur facture",
+        "Montants réduits sur factures",
+        "Factures avec rabais",
+        "Promotions appliquées sur factures",
+        "Détail des factures avec réductions"
+      ],
+      "sql": "SELECT i.id, i.reference, i.issue_date, i.due_date, i.total_ht, i.total_ttc, i.discount_rate, i.discount_amount, c.firstname || ' ' || c.lastname AS client_name, p.name AS project_name, rs.name AS status FROM invoices i JOIN projects p ON i.project_id = p.id JOIN clients c ON p.client_id = c.id JOIN ref_status rs ON i.status = rs.id WHERE (i.discount_rate > 0 OR i.discount_amount > 0 OR EXISTS (SELECT 1 FROM invoice_items ii WHERE ii.invoice_id = i.id AND ii.discount > 0)) AND rs.entity_type = 'invoice' ORDER BY i.issue_date DESC",
+      "description": "Liste des factures comportant une remise, soit au niveau global de la facture, soit au niveau des lignes de facturation"
+    },
+    {
+      "id": "invoices_with_multiple_payments",
+      "questions": [
+        "Quelles factures ont eu plusieurs paiements ?",
+        "Factures payées en plusieurs versements",
+        "Paiements fractionnés par facture",
+        "Liste des règlements multiples",
+        "Factures avec plusieurs encaissements",
+        "Paiement échelonné par facture",
+        "Factures réglées en plusieurs étapes",
+        "Suivi des paiements fractionnés",
+        "Historique multi-paiements",
+        "Dossier des paiements successifs"
+      ],
+      "sql": "SELECT i.id, i.reference, i.issue_date, i.due_date, i.total_ttc, COUNT(p.id) AS payment_count, SUM(p.amount) AS total_paid, c.firstname || ' ' || c.lastname AS client_name, rs.name AS status FROM invoices i JOIN projects pr ON i.project_id = pr.id JOIN clients c ON pr.client_id = c.id JOIN payments p ON i.id = p.invoice_id JOIN ref_status rs ON i.status = rs.id WHERE rs.entity_type = 'invoice' GROUP BY i.id, i.reference, i.issue_date, i.due_date, i.total_ttc, c.firstname, c.lastname, rs.name HAVING COUNT(p.id) > 1 ORDER BY COUNT(p.id) DESC",
+      "description": "Liste des factures ayant reçu plusieurs paiements distincts, avec le nombre total de versements"
+    },
+    {
+      "id": "invoices_with_missing_information",
+      "questions": [
+        "Quelles factures sont incomplètes ?",
+        "Factures avec infos manquantes",
+        "Liste des factures à vérifier",
+        "Champs vides sur factures",
+        "Factures à corriger",
+        "Où manque-t-il des infos ?",
+        "Vérification de complétude facture",
+        "Factures à revoir",
+        "Données absentes dans factures",
+        "Contrôle qualité des factures"
+      ],
+      "sql": "SELECT i.id, i.reference, i.issue_date, i.due_date, i.total_ht, i.total_ttc, c.firstname || ' ' || c.lastname AS client_name, p.name AS project_name, CASE WHEN i.payment_conditions IS NULL OR TRIM(i.payment_conditions) = '' THEN 'Conditions de paiement manquantes' WHEN i.notes IS NULL OR TRIM(i.notes) = '' THEN 'Notes manquantes' WHEN i.tva_rate IS NULL THEN 'Taux de TVA manquant' WHEN NOT EXISTS (SELECT 1 FROM invoice_items ii WHERE ii.invoice_id = i.id) THEN 'Aucun article dans la facture' ELSE 'Autres informations manquantes' END AS missing_info FROM invoices i JOIN projects p ON i.project_id = p.id JOIN clients c ON p.client_id = c.id JOIN ref_status rs ON i.status = rs.id WHERE (i.payment_conditions IS NULL OR TRIM(i.payment_conditions) = '' OR i.notes IS NULL OR TRIM(i.notes) = '' OR i.tva_rate IS NULL OR NOT EXISTS (SELECT 1 FROM invoice_items ii WHERE ii.invoice_id = i.id)) AND rs.entity_type = 'invoice' ORDER BY i.issue_date DESC",
+      "description": "Liste des factures comportant des informations manquantes ou incomplètes (conditions de paiement, notes, TVA, etc.)"
+    },
+    {
+      "id": "invoices_with_negative_amount",
+      "questions": [
+        "Quelles factures ont un montant négatif ?",
+        "Factures avec total négatif",
+        "Avoirs enregistrés",
+        "Remboursements clients",
+        "Erreurs de facturation ?",
+        "Annulations de factures",
+        "Valeurs négatives en facturation",
+        "Vérifier les avoirs émis",
+        "Liste des crédits émis",
+        "Factures en valeur négative"
+      ],
+      "sql": "SELECT i.id, i.reference, i.issue_date, i.due_date, i.total_ht, i.total_ttc, c.firstname || ' ' || c.lastname AS client_name, p.name AS project_name, rs.name AS status FROM invoices i JOIN projects p ON i.project_id = p.id JOIN clients c ON p.client_id = c.id JOIN ref_status rs ON i.status = rs.id WHERE (i.total_ht < 0 OR i.total_ttc < 0) AND rs.entity_type = 'invoice' ORDER BY i.issue_date DESC",
+      "description": "Liste des factures avec un montant négatif, correspondant généralement à des avoirs ou des remboursements clients"
+    },
+    {
+      "id": "invoices_waiting_for_payment",
+      "questions": [
+        "Quelles factures sont en attente de paiement ?",
+        "Factures envoyées mais non payées",
+        "En attente d'encaissement",
+        "Qui doit encore payer ?",
+        "Liste des factures à surveiller",
+        "Paiement attendu pour ces factures",
+        "Aucune transaction enregistrée",
+        "Factures dans la nature ?",
+        "Factures sans règlement enregistré",
+        "Suivi des envois non payés"
+      ],
+      "sql": "SELECT i.id, i.reference, i.issue_date, i.due_date, i.total_ht, i.total_ttc, c.firstname || ' ' || c.lastname AS client_name, c.email AS client_email, c.phone AS client_phone, p.name AS project_name, rs.name AS status, (i.due_date - CURRENT_DATE) AS days_until_due FROM invoices i JOIN projects p ON i.project_id = p.id JOIN clients c ON p.client_id = c.id JOIN ref_status rs ON i.status = rs.id WHERE rs.code = 'envoyée' AND rs.entity_type = 'invoice' AND NOT EXISTS (SELECT 1 FROM payments pay WHERE pay.invoice_id = i.id) ORDER BY i.due_date ASC",
+      "description": "Liste des factures envoyées aux clients mais pour lesquelles aucun paiement n'a encore été enregistré"
+    },
+    {
+      "id": "invoices_count_by_client",
+      "questions": [
+        "Combien de factures par client ?",
+        "Nombre total de factures émises par client",
+        "Répartition des factures par client",
+        "Statistiques client : volume de factures",
+        "Clients les plus facturés (en nombre)",
+        "Facturation client en volume",
+        "Volume de factures par client",
+        "Analyse du portefeuille client",
+        "Comptage de factures client",
+        "Rapport nombre de factures/client"
+      ],
+      "sql": "SELECT c.id, c.firstname || ' ' || c.lastname AS client_name, COUNT(i.id) AS total_invoices, COUNT(CASE WHEN rs.code = 'payée' THEN 1 END) AS paid_invoices, COUNT(CASE WHEN rs.code = 'en_retard' THEN 1 END) AS overdue_invoices, COUNT(CASE WHEN rs.code = 'envoyée' THEN 1 END) AS pending_invoices, ROUND(AVG(i.total_ttc), 2) AS average_amount FROM clients c JOIN projects p ON c.id = p.client_id JOIN invoices i ON p.id = i.project_id JOIN ref_status rs ON i.status = rs.id WHERE rs.entity_type = 'invoice' AND rs.code != 'annulée' GROUP BY c.id, c.firstname, c.lastname ORDER BY COUNT(i.id) DESC",
+      "description": "Nombre total de factures émises par client, avec détail des statuts et montant moyen"
+    },
+    {
+      "id": "invoices_due_today",
+      "questions": [
+        "Quelles factures sont dues aujourd'hui ?",
+        "Échéances du jour",
+        "Paiements à recevoir aujourd'hui",
+        "Factures à traiter aujourd'hui",
+        "Deadline de facturation du jour",
+        "Factures arrivées à terme",
+        "Échéances factures actuelles",
+        "Factures à relancer aujourd'hui",
+        "Liste des factures du jour",
+        "Factures échues aujourd'hui"
+      ],
+      "sql": "SELECT i.id, i.reference, i.issue_date, i.due_date, i.total_ht, i.total_ttc, c.firstname || ' ' || c.lastname AS client_name, c.email AS client_email, c.phone AS client_phone, p.name AS project_name, rs.name AS status FROM invoices i JOIN projects p ON i.project_id = p.id JOIN clients c ON p.client_id = c.id JOIN ref_status rs ON i.status = rs.id WHERE i.due_date = CURRENT_DATE AND rs.code NOT IN ('payée', 'annulée') AND rs.entity_type = 'invoice' ORDER BY i.reference",
+      "description": "Liste des factures dont l'échéance est fixée à aujourd'hui et qui ne sont pas encore complètement payées"
+    },
+    {
+      "id": "invoices_average_amount_by_status",
+      "questions": [
+        "Quel est le montant moyen des factures selon leur statut ?",
+        "Montant moyen par type de facture",
+        "Statistiques moyennes par statut de facturation",
+        "Analyse comparative des factures",
+        "Écart de montant selon les statuts",
+        "Classement des statuts par montant moyen",
+        "Moyenne par statut de facture",
+        "Tendance par type de statut",
+        "Analyse de facturation par état",
+        "Benchmarks de factures"
+      ],
+      "sql": "SELECT rs.name AS status, COUNT(i.id) AS invoice_count, ROUND(AVG(i.total_ht), 2) AS average_amount_ht, ROUND(AVG(i.total_ttc), 2) AS average_amount_ttc, ROUND(MIN(i.total_ttc), 2) AS min_amount, ROUND(MAX(i.total_ttc), 2) AS max_amount FROM invoices i JOIN ref_status rs ON i.status = rs.id WHERE rs.entity_type = 'invoice' GROUP BY rs.name, rs.code ORDER BY AVG(i.total_ttc) DESC",
+      "description": "Analyse des montants moyens des factures selon leur statut, avec statistiques complémentaires"
+    },
+    {
+      "id": "invoices_with_duplicate_references",
+      "questions": [
+        "Y a-t-il des factures en double ?",
+        "Factures avec références identiques",
+        "Doublons de numéros de facture",
+        "Détection des doublons de facturation",
+        "Références répétées dans les factures",
+        "Vérification d'unicité des références",
+        "Factures à contrôler (doublon)",
+        "Duplicata de factures détecté",
+        "Nettoyage des factures en double",
+        "Contrôle qualité factures"
+      ],
+      "sql": "SELECT i.reference, COUNT(i.id) AS occurrence_count, STRING_AGG(i.id::text, ', ') AS invoice_ids, STRING_AGG(TO_CHAR(i.issue_date, 'YYYY-MM-DD'), ', ') AS issue_dates, STRING_AGG(c.firstname || ' ' || c.lastname, ', ') AS client_names FROM invoices i JOIN projects p ON i.project_id = p.id JOIN clients c ON p.client_id = c.id GROUP BY i.reference HAVING COUNT(i.id) > 1 ORDER BY COUNT(i.id) DESC",
+      "description": "Détection des doublons potentiels de factures basée sur des références identiques"
+    },
+    {
+      "id": "invoices_issued_outside_business_hours",
+      "questions": [
+        "Quelles factures ont été émises hors des horaires de bureau ?",
+        "Factures créées la nuit ou le week-end",
+        "Anomalies horaires dans les factures",
+        "Création de factures en dehors des heures normales",
+        "Émission de factures non standard",
+        "Factures saisies le week-end",
+        "Travaux de nuit sur la facturation ?",
+        "Activité facturation hors plage horaire",
+        "Factures non conformes aux horaires de travail",
+        "Détection des horaires atypiques de facturation"
+      ],
+      "sql": "SELECT i.id, i.reference, i.issue_date, TO_CHAR(i.issue_date, 'Day') AS day_of_week, TO_CHAR(i.issue_date, 'HH24:MI:SS') AS time_issued, i.total_ht, i.total_ttc, c.firstname || ' ' || c.lastname AS client_name, p.name AS project_name, rs.name AS status FROM invoices i JOIN projects p ON i.project_id = p.id JOIN clients c ON p.client_id = c.id JOIN ref_status rs ON i.status = rs.id WHERE (EXTRACT(ISODOW FROM i.issue_date) IN (6, 7) OR EXTRACT(HOUR FROM i.issue_date) < 8 OR EXTRACT(HOUR FROM i.issue_date) >= 19) AND rs.entity_type = 'invoice' ORDER BY i.issue_date DESC",
+      "description": "Liste des factures émises en dehors des heures normales de bureau (week-end ou entre 19h et 8h)"
+    },
+    {
+      "id": "invoices_reissued",
+      "questions": [
+        "Quelles factures ont été refaites ?",
+        "Factures annulées puis réémises",
+        "Suivi des duplications de facture",
+        "Historique de réémission",
+        "Annulations suivies de nouvelles factures",
+        "Factures émises après annulation",
+        "Mêmes montants, même client ?",
+        "Rééditions de factures détectées",
+        "Factures remplacées",
+        "Suivi des ajustements de facturation"
+      ],
+      "sql": "WITH cancelled_invoices AS (SELECT i.id, i.reference, c.id AS client_id, p.id AS project_id, i.total_ttc, i.issue_date FROM invoices i JOIN projects p ON i.project_id = p.id JOIN clients c ON p.client_id = c.id JOIN ref_status rs ON i.status = rs.id WHERE rs.code = 'annulée' AND rs.entity_type = 'invoice') SELECT ci.reference AS cancelled_ref, ci.issue_date AS cancelled_date, i.reference AS new_ref, i.issue_date AS new_date, ABS(ci.total_ttc - i.total_ttc) AS amount_diff, c.firstname || ' ' || c.lastname AS client_name, p.name AS project_name FROM cancelled_invoices ci JOIN invoices i ON i.project_id = ci.project_id JOIN projects p ON i.project_id = p.id JOIN clients c ON p.client_id = c.id JOIN ref_status rs ON i.status = rs.id WHERE rs.entity_type = 'invoice' AND rs.code != 'annulée' AND i.issue_date > ci.issue_date AND i.issue_date - ci.issue_date <= INTERVAL '30 days' AND ABS(ci.total_ttc - i.total_ttc) / NULLIF(ci.total_ttc, 0) <= 0.2 ORDER BY i.issue_date DESC",
+      "description": "Détection des factures qui ont probablement été annulées puis réémises (même client, même projet, montant similaire, dans un délai court)"
+    },
+    {
+      "id": "invoices_grouped_by_week",
+      "questions": [
+        "Combien de factures par semaine ?",
+        "Regroupement des factures par semaine",
+        "Suivi hebdomadaire des factures",
+        "Facturation par semaine calendaire",
+        "Évolution de la facturation chaque semaine",
+        "Tendance hebdomadaire de facturation",
+        "Semaine par semaine : les factures",
+        "Vue consolidée par semaine",
+        "Répartition hebdo des factures",
+        "Analyse temporelle par semaine"
+      ],
+      "sql": "SELECT DATE_TRUNC('week', i.issue_date) AS week_start, TO_CHAR(DATE_TRUNC('week', i.issue_date), 'YYYY-MM-DD') || ' - ' || TO_CHAR(DATE_TRUNC('week', i.issue_date) + INTERVAL '6 days', 'YYYY-MM-DD') AS week_range, COUNT(*) AS invoice_count, ROUND(SUM(i.total_ht), 2) AS total_amount_ht, ROUND(SUM(i.total_ttc), 2) AS total_amount_ttc, COUNT(CASE WHEN rs.code = 'payée' THEN 1 END) AS paid_count, ROUND(AVG(i.total_ttc), 2) AS average_amount FROM invoices i JOIN ref_status rs ON i.status = rs.id WHERE rs.entity_type = 'invoice' AND i.issue_date >= CURRENT_DATE - INTERVAL '12 weeks' GROUP BY DATE_TRUNC('week', i.issue_date) ORDER BY DATE_TRUNC('week', i.issue_date) DESC",
+      "description": "Analyse des factures regroupées par semaine, avec statistiques complètes pour chaque période hebdomadaire"
+    },
+    {
+      "id": "invoices_with_long_description",
+      "questions": [
+        "Quelles factures ont des descriptions longues ?",
+        "Factures avec beaucoup de texte",
+        "Détails étendus dans les factures",
+        "Longueur de contenu sur factures",
+        "Factures à vérifier (trop de texte ?)",
+        "Analyse du volume de texte facture",
+        "Articles trop détaillés ?",
+        "Remarques très longues ?",
+        "Factures verbeuses",
+        "Audit des descriptions longues"
+      ],
+      "sql": "SELECT i.id, i.reference, i.issue_date, i.due_date, LENGTH(i.notes) AS notes_length, c.firstname || ' ' || c.lastname AS client_name, p.name AS project_name, rs.name AS status, EXISTS (SELECT 1 FROM invoice_items ii WHERE ii.invoice_id = i.id AND LENGTH(ii.description) > 500) AS has_long_item_descriptions FROM invoices i JOIN projects p ON i.project_id = p.id JOIN clients c ON p.client_id = c.id JOIN ref_status rs ON i.status = rs.id WHERE (LENGTH(i.notes) > 500 OR LENGTH(i.payment_conditions) > 500 OR EXISTS (SELECT 1 FROM invoice_items ii WHERE ii.invoice_id = i.id AND LENGTH(ii.description) > 500)) AND rs.entity_type = 'invoice' ORDER BY LENGTH(i.notes) DESC",
+      "description": "Liste des factures comportant des descriptions très longues, soit dans les notes générales, soit dans les articles"
+    },
+    {
+      "id": "invoices_linked_to_many_items",
+      "questions": [
+        "Quelles factures ont beaucoup d'articles ?",
+        "Factures avec un grand nombre de lignes",
+        "Volume élevé de produits/services facturés",
+        "Factures très détaillées",
+        "Combien d'éléments par facture ?",
+        "Analyse des factures volumineuses",
+        "Factures complexes avec de nombreuses lignes",
+        "Détail important sur facture",
+        "Factures à plusieurs postes",
+        "Audit des factures longues"
+      ],
+      "sql": "SELECT i.id, i.reference, i.issue_date, i.due_date, i.total_ht, i.total_ttc, COUNT(ii.id) AS item_count, c.firstname || ' ' || c.lastname AS client_name, p.name AS project_name, rs.name AS status FROM invoices i JOIN projects p ON i.project_id = p.id JOIN clients c ON p.client_id = c.id JOIN ref_status rs ON i.status = rs.id JOIN invoice_items ii ON i.id = ii.invoice_id WHERE rs.entity_type = 'invoice' GROUP BY i.id, i.reference, i.issue_date, i.due_date, i.total_ht, i.total_ttc, c.firstname, c.lastname, p.name, rs.name HAVING COUNT(ii.id) >= 10 ORDER BY COUNT(ii.id) DESC",
+      "description": "Liste des factures contenant un grand nombre d'articles (10 ou plus), triées par nombre d'articles décroissant"
     }
   ]
 }
