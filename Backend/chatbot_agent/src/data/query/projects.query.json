@@ -1891,6 +1891,35 @@
       ],
       "sql": "WITH project_activity AS (SELECT p.id, p.name, p.start_date, p.end_date, c.firstname || ' ' || c.lastname AS client_name, rs.name AS status, te.date, LEAD(te.date) OVER (PARTITION BY p.id ORDER BY te.date) AS next_activity_date FROM projects p JOIN clients c ON p.client_id = c.id JOIN ref_status rs ON p.status = rs.id LEFT JOIN timesheet_entries te ON p.id = te.project_id), project_pauses AS (SELECT id, name, start_date, end_date, client_name, status, date AS last_activity, next_activity_date, (next_activity_date - date) AS pause_duration FROM project_activity WHERE next_activity_date IS NOT NULL AND (next_activity_date - date) > 15) SELECT id, name, start_date, end_date, client_name, status, last_activity, next_activity_date, pause_duration FROM project_pauses ORDER BY pause_duration DESC",
       "description": "Liste des projets ayant des périodes d'inactivité supérieures à 15 jours, basées sur les entrées de feuilles de temps"
+    },    
+    {
+      "id": "projects_by_location",
+      "questions": [
+        "Quels sont les projets à [LOCATION] ?",
+        "Quels projets y a-t-il à [LOCATION] ?",
+        "Chantiers dans la ville de [LOCATION]",
+        "Projets situés à [LOCATION]",
+        "Liste des projets à [LOCATION]",
+        "Quels projets sont à [LOCATION] ?",
+        "Chantiers localisés à [LOCATION]",
+        "Projets dans [LOCATION]",
+        "Quels sont les chantiers à [LOCATION] ?",
+        "Travaux en cours à [LOCATION]",
+        "Projets dans la région de [LOCATION]",
+        "Chantiers sur [LOCATION]",
+        "Quels sont les projets situés à [LOCATION] ?",
+        "Projets à [LOCATION]",
+        "Y a-t-il des projets à [LOCATION] ?",
+        "Chantiers à [LOCATION]"
+      ],
+      "sql": "SELECT p.id, p.name, p.start_date, p.end_date, c.firstname || ' ' || c.lastname AS client_name, rs.name AS status FROM projects p JOIN clients c ON p.client_id = c.id JOIN ref_status rs ON p.status = rs.id JOIN addresses a ON p.address_id = a.id WHERE a.city ILIKE '%[LOCATION]%' OR a.zip_code ILIKE '%[LOCATION]%' OR a.street_name ILIKE '%[LOCATION]%' ORDER BY p.start_date DESC",
+      "description": "Liste des projets situés dans une localisation spécifique (ville, code postal, rue)",
+      "parameters": [
+        {
+          "name": "LOCATION",
+          "description": "Nom de la ville, code postal ou rue"
+        }
+      ]
     }    
   ]
 }
