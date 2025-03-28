@@ -48,7 +48,6 @@ export class InitService implements OnModuleInit {
       this.logger.log(`Collection existante contient ${count} éléments`);
 
       // Toujours réinitialiser la collection pour s'assurer qu'elle est correctement configurée
-      // (cela corrigera les problèmes potentiels avec les collections)
       this.logger.log('Réinitialisation de la collection...');
       await this.chromaService.deleteCollection();
       this.logger.log('Collection réinitialisée avec succès');
