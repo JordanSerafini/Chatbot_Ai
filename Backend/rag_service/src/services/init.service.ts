@@ -22,17 +22,15 @@ export class InitService implements OnModuleInit {
       this.logger.log('Vérification de la santé de ChromaDB...');
       let chromeReady = false;
       let attempts = 0;
-
       while (!chromeReady && attempts < 5) {
         try {
           await this.chromaService.checkHealth();
           chromeReady = true;
           this.logger.log('ChromaDB est prêt !');
         } catch (err) {
-          console.log(err);
           attempts++;
           this.logger.warn(
-            `ChromaDB n'est pas prêt (tentative ${attempts}/5), nouvelle tentative dans 5 secondes...`,
+            `ChromaDB n'est pas prêt (tentative ${attempts}/5), nouvelle tentative dans 5 secondes... Erreur: ${err.message}`,
           );
           await new Promise((resolve) => setTimeout(resolve, 5000));
         }
