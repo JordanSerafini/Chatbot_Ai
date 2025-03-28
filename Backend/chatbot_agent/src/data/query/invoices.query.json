@@ -714,7 +714,7 @@
     {
       "id": "invoices_grouped_by_week",
       "questions": [
-        "Combien de factures par semaine ?",
+        "Quels employés seront absents prochainement ?",
         "Regroupement des factures par semaine",
         "Suivi hebdomadaire des factures",
         "Facturation par semaine calendaire",
