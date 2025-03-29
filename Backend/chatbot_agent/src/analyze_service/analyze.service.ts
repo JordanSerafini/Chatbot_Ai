@@ -40,6 +40,7 @@ export class AnalyseService {
 
   async analyzeQuestion(question: string): Promise<AnalyzeResult> {
     try {
+
       const reformulation = await this.reformulateQuestion(question);
       const { keywords, entities } =
         await this.extractKeywordsAndEntities(question);
