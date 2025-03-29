@@ -399,6 +399,204 @@
       ],
       "sql": "SELECT c.id, c.firstname, c.lastname, c.email, c.phone, a.city FROM clients c LEFT JOIN addresses a ON c.address_id = a.id ORDER BY c.lastname, c.firstname",
       "description": "Liste complète de tous les clients enregistrés dans le système"
+    },
+    {
+      "id": "clients_with_quotations",
+      "questions": [
+        "Quels clients ont reçu un devis ?",
+        "Liste des clients ayant un devis",
+        "Clients concernés par un devis",
+        "Clients prospectés avec devis",
+        "Offres envoyées aux clients",
+        "Suivi des devis envoyés",
+        "Clients ayant eu une proposition",
+        "Clients en cours de devis",
+        "Prospects avec devis",
+        "Clients associés à des devis"
+      ],
+      "sql": "SELECT DISTINCT c.id, c.firstname, c.lastname, c.email, c.phone, COUNT(q.id) AS quotation_count FROM clients c JOIN projects p ON c.id = p.client_id JOIN quotations q ON p.id = q.project_id GROUP BY c.id, c.firstname, c.lastname, c.email, c.phone ORDER BY COUNT(q.id) DESC",
+      "description": "Liste des clients pour lesquels des devis ont été émis"
+    },
+    {
+      "id": "clients_to_follow_up",
+      "questions": [
+        "Quels clients n'ont rien fait depuis longtemps ?",
+        "Clients inactifs à relancer",
+        "Qui n'a pas été actif récemment ?",
+        "Relances clients en sommeil",
+        "Suivi des clients inactifs",
+        "Clients sans interaction récente",
+        "Clients non engagés",
+        "Qui ne donne plus signe de vie ?",
+        "Liste des clients dormants",
+        "Clients à contacter rapidement"
+      ],
+      "sql": "SELECT c.id, c.firstname, c.lastname, c.email, c.phone, MAX(GREATEST(COALESCE(p.updated_at, '1970-01-01'), COALESCE(i.issue_date, '1970-01-01'), COALESCE(pay.payment_date, '1970-01-01'), COALESCE(q.created_at, '1970-01-01'))) AS last_activity, CURRENT_DATE - MAX(GREATEST(COALESCE(p.updated_at, '1970-01-01'), COALESCE(i.issue_date, '1970-01-01'), COALESCE(pay.payment_date, '1970-01-01'), COALESCE(q.created_at, '1970-01-01'))) AS days_inactive FROM clients c LEFT JOIN projects p ON c.id = p.client_id LEFT JOIN invoices i ON p.id = i.project_id LEFT JOIN payments pay ON i.id = pay.invoice_id LEFT JOIN quotations q ON p.id = q.project_id WHERE c.created_at <= CURRENT_DATE - INTERVAL '[DAYS] days' GROUP BY c.id, c.firstname, c.lastname, c.email, c.phone HAVING MAX(GREATEST(COALESCE(p.updated_at, '1970-01-01'), COALESCE(i.issue_date, '1970-01-01'), COALESCE(pay.payment_date, '1970-01-01'), COALESCE(q.created_at, '1970-01-01'))) <= CURRENT_DATE - INTERVAL '[DAYS] days' ORDER BY last_activity ASC",
+      "description": "Liste des clients sans activité récente pendant une période définie",
+      "parameters": [
+        {
+          "name": "DAYS",
+          "description": "Nombre de jours d'inactivité",
+          "default": "90"
+        }
+      ]
+    },
+    {
+      "id": "clients_with_upcoming_due_invoices",
+      "questions": [
+        "Quels clients doivent bientôt payer ?",
+        "Factures à échéance proche par client",
+        "Règlements clients à venir",
+        "Qui doit payer prochainement ?",
+        "Clients avec factures presque dues",
+        "Factures arrivant bientôt à échéance",
+        "Clients à relancer avant échéance",
+        "Liste des paiements imminents",
+        "Clients avec factures à échéance sous peu",
+        "Paiements à venir dans la semaine"
+      ],
+      "sql": "SELECT c.id, c.firstname, c.lastname, c.email, c.phone, COUNT(i.id) AS upcoming_invoices, SUM(i.total_ttc) AS total_amount_due, MIN(i.due_date) AS earliest_due_date FROM clients c JOIN projects p ON c.id = p.client_id JOIN invoices i ON p.id = i.project_id JOIN ref_status rs ON i.status = rs.id WHERE rs.code IN ('envoyée', 'payée_partiellement') AND rs.entity_type = 'invoice' AND i.due_date BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '[DAYS] days' GROUP BY c.id, c.firstname, c.lastname, c.email, c.phone ORDER BY MIN(i.due_date) ASC",
+      "description": "Liste des clients avec des factures arrivant à échéance prochainement",
+      "parameters": [
+        {
+          "name": "DAYS",
+          "description": "Nombre de jours à venir pour l'échéance",
+          "default": "7"
+        }
+      ]
+    },
+    {
+      "id": "clients_monthly_revenue",
+      "questions": [
+        "Chiffre d'affaires mensuel par client",
+        "Évolution du CA client par mois",
+        "Ventilation des revenus client",
+        "Historique de facturation mensuelle",
+        "Analyse financière client mois par mois",
+        "Suivi mensuel du CA par client",
+        "Répartition du CA client",
+        "Quels clients génèrent le plus chaque mois ?",
+        "Graphique de revenu client",
+        "Stat mensuelles de facturation"
+      ],
+      "sql": "SELECT c.id, c.firstname || ' ' || c.lastname AS client_name, DATE_TRUNC('month', i.issue_date) AS month, SUM(i.total_ht) AS monthly_revenue FROM clients c JOIN projects p ON c.id = p.client_id JOIN invoices i ON p.id = i.project_id JOIN ref_status rs ON i.status = rs.id WHERE rs.entity_type = 'invoice' AND rs.code != 'annulée' AND i.issue_date >= CURRENT_DATE - INTERVAL '[MONTHS] months' GROUP BY c.id, c.firstname, c.lastname, DATE_TRUNC('month', i.issue_date) ORDER BY c.lastname, c.firstname, DATE_TRUNC('month', i.issue_date)",
+      "description": "Chiffre d'affaires mensuel généré par chaque client sur une période définie",
+      "parameters": [
+        {
+          "name": "MONTHS",
+          "description": "Nombre de mois d'historique",
+          "default": "12"
+        }
+      ]
+    },
+    {
+      "id": "clients_with_shared_address",
+      "questions": [
+        "Y a-t-il des clients avec la même adresse ?",
+        "Clients partageant une adresse",
+        "Doublons potentiels par adresse",
+        "Regrouper les clients à la même localisation",
+        "Adresse commune entre plusieurs clients",
+        "Fiches clients en doublon",
+        "Clients domiciliés ensemble",
+        "Résidents à la même adresse",
+        "Clients à vérifier (adresse similaire)",
+        "Analyse des adresses clients"
+      ],
+      "sql": "SELECT a.street_number, a.street_name, a.zip_code, a.city, COUNT(c.id) AS client_count, STRING_AGG(c.firstname || ' ' || c.lastname, ', ') AS clients FROM addresses a JOIN clients c ON a.id = c.address_id GROUP BY a.street_number, a.street_name, a.zip_code, a.city HAVING COUNT(c.id) > 1 ORDER BY COUNT(c.id) DESC, a.city, a.street_name",
+      "description": "Liste des adresses partagées par plusieurs clients, pour identifier les doublons potentiels ou les regroupements familiaux"
+    },
+    {
+      "id": "clients_avg_invoice_amount",
+      "questions": [
+        "Quel est le panier moyen par client ?",
+        "Montant moyen des factures client",
+        "Revenu moyen par client",
+        "Clients avec panier moyen élevé",
+        "Analyse du panier moyen client",
+        "Facturation moyenne par client",
+        "Moyenne de factures par client",
+        "Quel est le ticket moyen ?",
+        "Quels clients dépensent le plus ?",
+        "Classement selon la moyenne de facturation"
+      ],
+      "sql": "SELECT c.id, c.firstname, c.lastname, c.email, c.phone, COUNT(i.id) AS invoice_count, ROUND(AVG(i.total_ht), 2) AS average_invoice_amount FROM clients c JOIN projects p ON c.id = p.client_id JOIN invoices i ON p.id = i.project_id JOIN ref_status rs ON i.status = rs.id WHERE rs.entity_type = 'invoice' AND rs.code != 'annulée' GROUP BY c.id, c.firstname, c.lastname, c.email, c.phone HAVING COUNT(i.id) > 0 ORDER BY AVG(i.total_ht) DESC",
+      "description": "Montant moyen des factures par client, trié par valeur décroissante"
+    },
+    {
+      "id": "clients_with_most_paid_invoices",
+      "questions": [
+        "Quels clients ont payé le plus de factures ?",
+        "Classement des bons payeurs",
+        "Qui règle le plus souvent ?",
+        "Clients les plus fiables pour les paiements",
+        "Top clients en nombre de factures réglées",
+        "Clients avec historique de paiements régulier",
+        "Liste des clients bons payeurs",
+        "Fréquence de règlement par client",
+        "Qui a le plus de factures payées ?",
+        "Statistiques de paiement client par volume"
+      ],
+      "sql": "SELECT c.id, c.firstname, c.lastname, c.email, c.phone, COUNT(i.id) AS paid_invoices_count FROM clients c JOIN projects p ON c.id = p.client_id JOIN invoices i ON p.id = i.project_id JOIN ref_status rs ON i.status = rs.id WHERE rs.entity_type = 'invoice' AND rs.code = 'payée' GROUP BY c.id, c.firstname, c.lastname, c.email, c.phone ORDER BY COUNT(i.id) DESC",
+      "description": "Liste des clients ayant payé le plus grand nombre de factures"
+    },
+    {
+      "id": "clients_revenue_growth",
+      "questions": [
+        "Quels clients génèrent plus qu'avant ?",
+        "Croissance du chiffre d'affaires client",
+        "Quels clients ont augmenté leur budget ?",
+        "Clients avec évolution positive",
+        "Variation du CA par client",
+        "Clients en progression financière",
+        "Analyse croissance client",
+        "Qui a le plus progressé ?",
+        "Clients avec meilleure dynamique",
+        "Tendance des revenus client"
+      ],
+      "sql": "WITH previous_period AS (SELECT c.id, SUM(i.total_ht) AS revenue FROM clients c JOIN projects p ON c.id = p.client_id JOIN invoices i ON p.id = i.project_id JOIN ref_status rs ON i.status = rs.id WHERE rs.entity_type = 'invoice' AND rs.code != 'annulée' AND i.issue_date BETWEEN CURRENT_DATE - INTERVAL '[MONTHS] months' * 2 AND CURRENT_DATE - INTERVAL '[MONTHS] months' GROUP BY c.id), current_period AS (SELECT c.id, c.firstname, c.lastname, c.email, c.phone, SUM(i.total_ht) AS revenue FROM clients c JOIN projects p ON c.id = p.client_id JOIN invoices i ON p.id = i.project_id JOIN ref_status rs ON i.status = rs.id WHERE rs.entity_type = 'invoice' AND rs.code != 'annulée' AND i.issue_date BETWEEN CURRENT_DATE - INTERVAL '[MONTHS] months' AND CURRENT_DATE GROUP BY c.id, c.firstname, c.lastname, c.email, c.phone) SELECT cp.id, cp.firstname, cp.lastname, cp.email, cp.phone, cp.revenue AS current_revenue, pp.revenue AS previous_revenue, ROUND((cp.revenue - pp.revenue) / NULLIF(pp.revenue, 0) * 100, 2) AS growth_percentage FROM current_period cp JOIN previous_period pp ON cp.id = pp.id WHERE pp.revenue > 0 ORDER BY (cp.revenue - pp.revenue) / NULLIF(pp.revenue, 0) DESC",
+      "description": "Analyse de la croissance du chiffre d'affaires généré par chaque client entre deux périodes",
+      "parameters": [
+        {
+          "name": "MONTHS",
+          "description": "Nombre de mois pour chaque période d'analyse",
+          "default": "6"
+        }
+      ]
+    },
+    {
+      "id": "clients_with_most_projects_this_year",
+      "questions": [
+        "Qui a lancé le plus de projets cette année ?",
+        "Activité client depuis janvier",
+        "Projets clients en 2025",
+        "Clients les plus actifs cette année",
+        "Nombre de projets par client sur l'année",
+        "Top clients 2025 (nombre de chantiers)",
+        "Quels clients sont les plus productifs cette année ?",
+        "Classement par projets récents",
+        "Projets démarrés cette année par client",
+        "Bilan annuel client (projets)"
+      ],
+      "sql": "SELECT c.id, c.firstname, c.lastname, c.email, c.phone, COUNT(p.id) AS projects_count FROM clients c JOIN projects p ON c.id = p.client_id WHERE EXTRACT(YEAR FROM p.start_date) = EXTRACT(YEAR FROM CURRENT_DATE) GROUP BY c.id, c.firstname, c.lastname, c.email, c.phone ORDER BY COUNT(p.id) DESC",
+      "description": "Liste des clients ayant lancé le plus de projets durant l'année en cours"
+    },
+    {
+      "id": "clients_linked_to_multiple_addresses",
+      "questions": [
+        "Clients avec plusieurs adresses",
+        "Qui a changé d'adresse ?",
+        "Liste des clients multi-adressés",
+        "Historique d'adresse des clients",
+        "Clients associés à plusieurs localisations",
+        "Clients ayant déménagé",
+        "Clients avec adresses multiples",
+        "Référencement multi-adresse client",
+        "Qui a plusieurs domiciles ?",
+        "Suivi des changements d'adresse client"
+      ],
+      "sql": "SELECT c.id, c.firstname, c.lastname, c.email, c.phone, COUNT(ca.address_id) AS address_count, STRING_AGG(a.city, ', ') AS cities FROM clients c JOIN client_addresses ca ON c.id = ca.client_id JOIN addresses a ON ca.address_id = a.id GROUP BY c.id, c.firstname, c.lastname, c.email, c.phone HAVING COUNT(ca.address_id) > 1 ORDER BY COUNT(ca.address_id) DESC",
+      "description": "Liste des clients associés à plusieurs adresses, suggérant des déménagements ou des résidences multiples"
     }
   ]
 }

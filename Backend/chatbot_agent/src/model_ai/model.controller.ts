@@ -19,6 +19,7 @@ interface RagResponse {
     question: string;
     distance: number;
     parameters?: any[];
+    extractedParams?: any;
   };
   otherQueries: {
     sql: string;
@@ -44,6 +45,7 @@ interface QueryExecutionResponse {
     question: string;
     sql: string;
     description: string;
+    parameters?: any;
   };
   alternativeQuestions?: {
     question: string;
@@ -119,11 +121,19 @@ export class ModelController {
 
       this.logger.log(`Query selected: ${response.querySelected.sql}`);
 
+      // Vérifier s'il y a des paramètres extraits
+      const extractedParams = response.querySelected.extractedParams || {};
+      if (Object.keys(extractedParams).length > 0) {
+        this.logger.log(
+          `Extracted parameters: ${JSON.stringify(extractedParams)}`,
+        );
+      }
+
       try {
         // 2. Exécuter la requête SQL via le QuerierService
         const sqlResult = await this.querierService.executeSelectedQuery(
           response.querySelected.sql,
-          response.querySelected.parameters || [],
+          extractedParams, // Passer les paramètres extraits comme un objet
         );
 
         // 3. Retourner la réponse combinée
@@ -143,6 +153,7 @@ export class ModelController {
             question: response.querySelected.question,
             sql: response.querySelected.sql,
             description: response.querySelected.description,
+            parameters: extractedParams,
           },
           alternativeQuestions: otherQueries,
           textResponse: await this.modelService.generateNaturalResponse(
@@ -180,13 +191,34 @@ export class ModelController {
         queryDto.question,
       );
 
+      // Vérifier s'il y a des paramètres extraits
+      const hasParams =
+        ragResponse.querySelected &&
+        ragResponse.querySelected.extractedParams &&
+        Object.keys(ragResponse.querySelected.extractedParams).length > 0;
+
+      if (hasParams) {
+        this.logger.log(
+          `Extracted parameters: ${JSON.stringify(ragResponse.querySelected.extractedParams)}`,
+        );
+      }
+
+      // Assurer que la structure passée au service querier contient les paramètres extraits
+      const querierPayload = {
+        querySelected: {
+          ...ragResponse.querySelected,
+          parameters: ragResponse.querySelected.extractedParams || {},
+        },
+        otherQueries: ragResponse.otherQueries,
+      };
+
       // 2. Envoyer la requête au contrôleur querier via HTTP
       const querierUrl = 'http://localhost:3001/query/rag';
       this.logger.log(`Sending request to querier: ${querierUrl}`);
 
       try {
         const response = await firstValueFrom(
-          this.httpService.post(querierUrl, ragResponse),
+          this.httpService.post(querierUrl, querierPayload),
         );
 
         // 3. Préparer une réponse complète pour le chatbot
@@ -207,6 +239,7 @@ export class ModelController {
             question: ragResponse.querySelected.question,
             sql: ragResponse.querySelected.sql,
             description: ragResponse.querySelected.description,
+            parameters: ragResponse.querySelected.extractedParams || {},
           },
 
           // Questions alternatives pour le chatbot
@@ -238,7 +271,10 @@ export class ModelController {
         return {
           success: false,
           error: `Error executing query: ${httpError.message}`,
-          selectedQuery: ragResponse.querySelected,
+          selectedQuery: {
+            ...ragResponse.querySelected,
+            parameters: ragResponse.querySelected.extractedParams || {},
+          },
           alternativeQuestions: ragResponse.otherQueries.map((query) => ({
             question: query.question,
             sql: query.sql,

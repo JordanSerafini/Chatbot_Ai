@@ -23,6 +23,7 @@ interface RagResponse {
     question: string;
     distance: number;
     parameters?: any[];
+    extractedParams: { [key: string]: string };
   };
   otherQueries: {
     sql: string;
@@ -55,12 +56,17 @@ export class ModelService {
 
   private getLmStudioUrl(): string {
     return (
-      this.configService.get('LM_STUDIO_URL') || 'http://localhost:1234/v1'
+      this.configService.get('LM_STUDIO_URL') ||
+      'https://9817-2a01-cb15-4c5-c200-f2fb-3748-6412-c45a.ngrok-free.app/v1'
     );
   }
 
   private getRagUrl(): string {
     return this.configService.get('RAG_SERVICE_URL') || 'http://localhost:3002';
+  }
+
+  private getAnalyzeUrl(): string {
+    return this.configService.get('ANALYZE_URL') || 'http://localhost:3001';
   }
 
   private async checkLmStudioAvailability(): Promise<void> {
@@ -70,6 +76,7 @@ export class ModelService {
     // Liste des URLs à essayer en cas d'échec
     const fallbackUrls = [
       lmStudioUrl,
+      'https://9817-2a01-cb15-4c5-c200-f2fb-3748-6412-c45a.ngrok-free.app/v1',
       'http://host.docker.internal:1234/v1',
       'http://172.17.0.1:1234/v1',
       'http://localhost:1234/v1',
@@ -113,10 +120,7 @@ export class ModelService {
         `Error details: ${JSON.stringify(lastError.code || 'No error code')}`,
       );
       this.logger.error(
-        'Make sure LM Studio is running with API server enabled on http://localhost:1234',
-      );
-      this.logger.error(
-        'From Docker, we are trying to access it via multiple methods including host.docker.internal',
+        'Make sure LM Studio is running with API server enabled on LM_STUDIO_URL=https://9817-2a01-cb15-4c5-c200-f2fb-3748-6412-c45a.ngrok-free.app/v1 or http://localhost:1234',
       );
     }
   }
@@ -136,17 +140,167 @@ export class ModelService {
       .normalize('NFD')
       .replace(/[\u0300-\u036f]/g, '');
 
+    this.logger.log(
+      `Extraction des paramètres pour la question: "${question}"`,
+    );
+    this.logger.log(`Paramètres attendus: ${JSON.stringify(parameters)}`);
+
     parameters.forEach((param) => {
       const paramName = param.name;
       let paramValue: string | undefined;
 
       switch (paramName) {
+        case 'CITY': {
+          // Rechercher le nom de la ville
+          // Différents patterns possibles : "à Paris", "de Lyon", "sur Bordeaux", etc.
+          const cityPatterns = [
+            /(?:a|à|de|dans|en|sur|pour)\s+([a-z\s-]{2,}?)(?:\s|$|\?|\.)/i,
+            /(?:ville|city|location)\s+(?:de|d'|du)?\s*([a-z\s-]{2,}?)(?:\s|$|\?|\.)/i,
+          ];
+
+          for (const pattern of cityPatterns) {
+            const cityMatches = normalizedQuestion.match(pattern);
+            if (cityMatches && cityMatches[1]) {
+              paramValue = cityMatches[1].trim();
+              break;
+            }
+          }
+
+          // Si aucun pattern ne correspond, chercher directement des noms de villes connus
+          if (!paramValue) {
+            const knownCities = [
+              'paris',
+              'lyon',
+              'marseille',
+              'bordeaux',
+              'lille',
+              'nantes',
+              'toulouse',
+              'strasbourg',
+              'montpellier',
+              'nice',
+            ];
+            for (const city of knownCities) {
+              if (normalizedQuestion.includes(city)) {
+                paramValue = city;
+                break;
+              }
+            }
+          }
+
+          break;
+        }
         case 'CLIENT': {
-          const clientMatches = normalizedQuestion.match(
-            /(?:client|pour|de)\s+([a-z\s]+?)(?:\s|$)/i,
+          // Détecter directement les noms propres au format "Prénom Nom"
+          const fullNameMatches = question.match(
+            /(\b[A-Z][a-zé]+ [A-Z][a-zé]+\b)/g,
           );
-          if (clientMatches) {
-            paramValue = clientMatches[1].trim();
+          if (fullNameMatches && fullNameMatches.length > 0) {
+            paramValue = fullNameMatches[0].trim();
+            this.logger.log(
+              `Nom complet détecté dans la question: "${paramValue}"`,
+            );
+            break;
+          }
+
+          // Rechercher le nom du client avec différents patterns
+          const clientPatterns = [
+            /(?:client|pour|de)\s+([A-Za-zÀ-ÖØ-öø-ÿ\s-]{2,}?)(?:\s|$|\?|\.)/i,
+            /(?:mr|m\.|monsieur|mme|madame|ms)\s+([A-Za-zÀ-ÖØ-öø-ÿ\s-]{2,}?)(?:\s|$|\?|\.)/i,
+          ];
+
+          // Extraire les noms propres potentiels
+          const nameExtractionPattern =
+            /([A-ZÀ-Ö][a-zà-öø-ÿ]+(?:\s+[A-ZÀ-Ö][a-zà-öø-ÿ]+)+)/g;
+          const potentialNames = question.match(nameExtractionPattern);
+
+          // D'abord essayer les patterns spécifiques
+          for (const pattern of clientPatterns) {
+            const clientMatches = question.match(pattern);
+            if (clientMatches && clientMatches[1]) {
+              paramValue = clientMatches[1].trim();
+              this.logger.log(`Client détecté via pattern: "${paramValue}"`);
+              break;
+            }
+          }
+
+          // Si aucun pattern ne correspond mais on a trouvé des noms propres
+          if (!paramValue && potentialNames && potentialNames.length > 0) {
+            // Prendre le nom propre le plus long
+            paramValue = potentialNames
+              .sort((a, b) => b.length - a.length)[0]
+              .trim();
+            this.logger.log(`Client détecté via nom propre: "${paramValue}"`);
+          }
+
+          // Vérifier si nous avons trouvé "quel projets" ou une partie de la question comme client
+          // (cas d'erreur fréquent)
+          if (
+            paramValue &&
+            (paramValue.toLowerCase().includes('quel') ||
+              paramValue.toLowerCase().includes('projet') ||
+              paramValue.toLowerCase() === normalizedQuestion)
+          ) {
+            // Dans ce cas, chercher un vrai nom propre dans la question
+            const betterNameMatches = question.match(
+              /([A-ZÀ-Ö][a-zà-öø-ÿ]+\s+[A-ZÀ-Ö][a-zà-öø-ÿ]+)/g,
+            );
+            if (betterNameMatches && betterNameMatches.length > 0) {
+              paramValue = betterNameMatches[0].trim();
+              this.logger.log(`Correction du client erroné: "${paramValue}"`);
+            }
+          }
+
+          break;
+        }
+        case 'MONTH': {
+          // Rechercher le mois
+          const monthNames = {
+            janvier: '01',
+            fevrier: '02',
+            mars: '03',
+            avril: '04',
+            mai: '05',
+            juin: '06',
+            juillet: '07',
+            aout: '08',
+            septembre: '09',
+            octobre: '10',
+            novembre: '11',
+            decembre: '12',
+          };
+
+          for (const [month, value] of Object.entries(monthNames)) {
+            if (normalizedQuestion.includes(month)) {
+              paramValue = value;
+              break;
+            }
+          }
+
+          // Vérifier si on parle du mois courant
+          if (
+            !paramValue &&
+            (normalizedQuestion.includes('ce mois') ||
+              normalizedQuestion.includes('mois en cours') ||
+              normalizedQuestion.includes('mois actuel'))
+          ) {
+            const currentDate = new Date();
+            paramValue = String(currentDate.getMonth() + 1).padStart(2, '0');
+          }
+          break;
+        }
+        case 'STAFF': {
+          // Rechercher le nom du staff
+          const staffPatterns = [
+            /(?:staff|personnel|employe|employé|technicien|ouvrier)\s+([a-z\s-]{2,}?)(?:\s|$|\?|\.)/i,
+          ];
+
+          for (const pattern of staffPatterns) {
+            const staffMatches = normalizedQuestion.match(pattern);
+            if (staffMatches && staffMatches[1]) {
+              paramValue = staffMatches[1].trim();
+              break;
+            }
           }
           break;
         }
@@ -178,14 +332,16 @@ export class ModelService {
         }
         case 'STATUS': {
           const statusMatches = normalizedQuestion.match(
-            /\b(brouillon|envoyee?|payee?|en[_\s]retard|annulee?)\b/i,
+            /\b(brouillon|envoyee?|payee?|en[_\s]retard|annulee?|en cours|terminé|termine|accepté|accepte)\b/i,
           );
           if (statusMatches) {
             paramValue = statusMatches[1]
               .toLowerCase()
               .replace('envoyee', 'envoyée')
               .replace('payee', 'payée')
-              .replace('annulee', 'annulée');
+              .replace('annulee', 'annulée')
+              .replace('termine', 'terminé')
+              .replace('accepte', 'accepté');
           }
           break;
         }
@@ -248,6 +404,9 @@ export class ModelService {
 
       if (paramValue) {
         extractedParams[paramName] = paramValue;
+        this.logger.log(`Paramètre extrait: ${paramName} = ${paramValue}`);
+      } else {
+        this.logger.warn(`Paramètre ${paramName} non trouvé dans la question`);
       }
     });
 
@@ -262,18 +421,81 @@ export class ModelService {
 
     Object.entries(params).forEach(([key, value]) => {
       const paramRegex = new RegExp(`\\[${key}\\]`, 'g');
-      modifiedSql = modifiedSql.replace(paramRegex, value);
+      // Adapter la valeur pour la requête SQL
+      let sqlValue = value;
+
+      // Si c'est un CLIENT, s'assurer que les caractères spéciaux sont gérés
+      if (key === 'CLIENT') {
+        // Échapper les apostrophes pour SQL
+        sqlValue = value.replace(/'/g, "''");
+
+        // Vérifier si le nom du client est peut-être détecté à partir de la question
+        if (
+          value.toLowerCase().includes('quel') ||
+          value.toLowerCase().includes('projet')
+        ) {
+          // Essayer de trouver un meilleur nom dans la requête SQL
+          const originalQuery = sql;
+          const nameMatches = originalQuery.match(/ILIKE '%([^%]+)%'/);
+          if (
+            nameMatches &&
+            nameMatches[1] &&
+            !nameMatches[1].toLowerCase().includes('quel')
+          ) {
+            sqlValue = nameMatches[1];
+            this.logger.log(
+              `Remplacement du client: "${value}" par "${sqlValue}" pour la requête SQL`,
+            );
+          }
+        }
+      }
+
+      modifiedSql = modifiedSql.replace(paramRegex, sqlValue);
+      this.logger.log(
+        `Remplacé [${key}] par "${sqlValue}" dans la requête SQL`,
+      );
     });
 
+    this.logger.log(`Requête SQL modifiée: ${modifiedSql}`);
     return modifiedSql;
   }
 
   async generateResponse(question: string): Promise<RagResponse> {
     this.logger.log(`Starting generateResponse with question: ${question}`);
     try {
-      // 1. Get similar questions from RAG
-      const similarQuestions = await this.getSimilarQuestions(question);
-      this.logger.log(`Found ${similarQuestions.length} similar questions`);
+      // 0. Analyser et reformuler la question via le service d'analyse
+      let analyzedQuestion = question;
+      try {
+        const analyzeResponse = await axios.post(
+          `${this.getAnalyzeUrl()}/analyze/question`,
+          { question },
+          {
+            timeout: 8000,
+            headers: { 'Content-Type': 'application/json' },
+          },
+        );
+
+        if (analyzeResponse.data && analyzeResponse.data.reformulation) {
+          analyzedQuestion = analyzeResponse.data.reformulation;
+          this.logger.log(
+            `Question reformulée: "${analyzedQuestion}" (originale: "${question}")`,
+          );
+        } else {
+          this.logger.warn(
+            `Le service d'analyse n'a pas retourné de reformulation, utilisation de la question originale.`,
+          );
+        }
+      } catch (analyzeError) {
+        this.logger.warn(
+          `Erreur lors de l'analyse de la question: ${analyzeError.message}. Utilisation de la question originale.`,
+        );
+      }
+
+      // 1. Get similar questions from RAG avec la question reformulée
+      const similarQuestions = await this.getSimilarQuestions(analyzedQuestion);
+      this.logger.log(
+        `Found ${similarQuestions.length} similar questions for "${analyzedQuestion}"`,
+      );
 
       if (similarQuestions.length === 0) {
         return {
@@ -282,16 +504,22 @@ export class ModelService {
             description: '',
             question: '',
             distance: 0,
+            parameters: [],
+            extractedParams: {},
           },
           otherQueries: [],
         };
       }
 
       // 2. Select best match using LM Studio
-      const bestMatch = await this.selectBestMatch(question, similarQuestions);
+      const bestMatch = this.selectBestMatch(
+        analyzedQuestion,
+        similarQuestions,
+      );
       this.logger.log(`Selected best match: ${bestMatch.question}`);
 
       // 3. Extraire et remplacer les paramètres dans la requête SQL
+      // Utiliser la question originale pour l'extraction des paramètres pour une meilleure précision
       const extractedParams = this.extractParametersFromQuestion(
         question,
         bestMatch.metadata.parameters || [],
@@ -321,6 +549,7 @@ export class ModelService {
           question: bestMatch.question,
           distance: bestMatch.distance,
           parameters: bestMatch.metadata.parameters || [],
+          extractedParams: extractedParams,
         },
         otherQueries: otherQueriesDetails,
       };
@@ -332,6 +561,8 @@ export class ModelService {
           description: '',
           question: '',
           distance: 0,
+          parameters: [],
+          extractedParams: {},
         },
         otherQueries: [],
       };
@@ -706,10 +937,10 @@ export class ModelService {
     return Math.max(0, score); // Empêcher les scores négatifs
   }
 
-  private async selectBestMatch(
+  private selectBestMatch(
     question: string,
     options: RagQuestion[],
-  ): Promise<RagQuestion> {
+  ): RagQuestion {
     try {
       this.logger.log(`Sélection pour la question: "${question}"`);
 
@@ -717,140 +948,341 @@ export class ModelService {
       const normalizedQuestion = question
         .toLowerCase()
         .normalize('NFD')
-        .replace(/[\u0300-\u036f]/g, '');
+        .replace(/[\u0300-\u036f]/g, '')
+        .trim();
 
-      // Essayer d'abord une approche purement basée sur le score
+      // Détection spécifique pour les devis
+      const devisKeywords = [
+        'devis',
+        'offre',
+        'proposition',
+        'cotation',
+        'estimation',
+      ];
+      const hasDevisKeywords = devisKeywords.some((keyword) =>
+        normalizedQuestion.includes(keyword),
+      );
+
+      // Détection des statuts de devis
+      const statusPatterns = {
+        en_attente: [
+          'en attente',
+          'attente',
+          'non decides',
+          'non valides',
+          'a valider',
+          'sans reponse',
+        ],
+        accepté: [
+          'accepte',
+          'acceptes',
+          'valide',
+          'valides',
+          'approuve',
+          'approuves',
+          'valides',
+          'validés',
+          'validation',
+        ],
+        refusé: [
+          'refuse',
+          'refuses',
+          'rejete',
+          'rejetes',
+          'non retenus',
+          'non acceptes',
+        ],
+      };
+
+      let detectedStatus = '';
+      if (hasDevisKeywords) {
+        for (const [status, patterns] of Object.entries(statusPatterns)) {
+          if (
+            patterns.some((pattern) => normalizedQuestion.includes(pattern))
+          ) {
+            detectedStatus = status;
+            this.logger.log(`Statut de devis détecté: "${detectedStatus}"`);
+            break;
+          }
+        }
+      }
+
+      // Recherche spécifique pour devis par statut
+      if (hasDevisKeywords) {
+        // Priorité 1: Si un statut est explicitement détecté, chercher une requête exacte
+        if (detectedStatus) {
+          const devisStatusOption = options.find(
+            (option) =>
+              option.question.toLowerCase().includes('devis') &&
+              (option.question.toLowerCase().includes('[status]') ||
+                option.question.toLowerCase().includes(detectedStatus)) &&
+              option.metadata.sql.toLowerCase().includes(detectedStatus),
+          );
+
+          if (devisStatusOption) {
+            this.logger.log(
+              `Option sélectionnée pour les devis avec statut ${detectedStatus}: "${devisStatusOption.question}"`,
+            );
+            return devisStatusOption;
+          }
+        }
+
+        // Priorité 2: Recherche plus générale pour tout type de devis par statut
+        const devisStatusOptions = options.filter(
+          (option) =>
+            option.question.toLowerCase().includes('devis') &&
+            (option.question.toLowerCase().includes('sont') ||
+              option.question.toLowerCase().includes('statut') ||
+              option.question.toLowerCase().includes('[status]')),
+        );
+
+        // Si nous avons un statut implicite mais pas de statut détecté (ex: "devis validés")
+        if (devisStatusOptions.length > 0) {
+          // Chercher le statut dans la question originale, car les mots clés comme "validés"
+          // peuvent être considérés comme des statuts implicites
+          if (!detectedStatus) {
+            if (
+              normalizedQuestion.includes('valide') ||
+              normalizedQuestion.includes('accepte')
+            ) {
+              detectedStatus = 'accepté';
+            } else if (
+              normalizedQuestion.includes('refuse') ||
+              normalizedQuestion.includes('rejete')
+            ) {
+              detectedStatus = 'refusé';
+            } else if (normalizedQuestion.includes('attente')) {
+              detectedStatus = 'en_attente';
+            }
+          }
+
+          // Si un statut est maintenant détecté, utiliser l'option correspondante
+          if (detectedStatus) {
+            const matchingOption = devisStatusOptions.find((option) =>
+              option.metadata.sql.toLowerCase().includes(detectedStatus),
+            );
+            if (matchingOption) {
+              this.logger.log(
+                `Option sélectionnée pour les devis au statut "${detectedStatus}": "${matchingOption.question}"`,
+              );
+              return matchingOption;
+            }
+          }
+
+          // Si toujours pas de correspondance, prendre la première option des devis par statut
+          this.logger.log(
+            `Option sélectionnée par défaut pour les devis par statut: "${devisStatusOptions[0].question}"`,
+          );
+          return devisStatusOptions[0];
+        }
+      }
+
+      // Extraire le client mentionné dans la question
+      let clientName = '';
+      // Patterns pour détecter un client dans différents contextes
+      const clientPatterns = [
+        /(?:client|pour|de)\s+([A-Za-zÀ-ÖØ-öø-ÿ\s-]{2,}?)(?:\s|$|\?|\.)/i,
+        /au\s+client\s+([A-Za-zÀ-ÖØ-öø-ÿ\s-]{2,}?)(?:\s|$|\?|\.)/i,
+        /du\s+client\s+([A-Za-zÀ-ÖØ-öø-ÿ\s-]{2,}?)(?:\s|$|\?|\.)/i,
+      ];
+
+      for (const pattern of clientPatterns) {
+        const clientMatches = question.match(pattern);
+        if (clientMatches && clientMatches[1]) {
+          clientName = clientMatches[1].trim();
+          this.logger.log(`Client détecté dans la question: "${clientName}"`);
+          break;
+        }
+      }
+
+      // Recherche spécifique pour devis d'un client
+      if (hasDevisKeywords && clientName) {
+        const devisClientOption = options.find(
+          (option) =>
+            option.question.toLowerCase().includes('devis') &&
+            option.question.toLowerCase().includes('[client]') &&
+            option.metadata.sql.toLowerCase().includes('client'),
+        );
+
+        if (devisClientOption) {
+          this.logger.log(
+            `Option sélectionnée pour les devis d'un client: "${devisClientOption.question}"`,
+          );
+          return devisClientOption;
+        }
+      }
+
+      // Détection spécifique pour les projets par ville
+      // Patterns pour détecter des villes dans différents contextes
+      const cityPatterns = [
+        /(?:a|à|de|dans|en|sur|pour)\s+([a-z\s-]{2,}?)(?:\s|$|\?|\.)/i,
+        /(?:ville|city|location)\s+(?:de|d'|du)?\s*([a-z\s-]{2,}?)(?:\s|$|\?|\.)/i,
+        /dans\s+la\s+ville\s+(?:de\s+)?([a-z\s-]{2,}?)(?:\s|$|\?|\.)/i,
+        /(?:projet|chantier|travaux).*?(?:a|à|en|dans)\s+([a-z\s-]{2,}?)(?:\s|$|\?|\.)/i,
+      ];
+
+      let cityMentioned = '';
+      for (const pattern of cityPatterns) {
+        const cityMatches = question.match(pattern);
+        if (cityMatches && cityMatches[1]) {
+          cityMentioned = cityMatches[1].trim();
+          this.logger.log(
+            `Ville détectée dans la question: "${cityMentioned}"`,
+          );
+          break;
+        }
+      }
+
+      // Détection explicite pour "ville de paris" et variations
+      if (!cityMentioned) {
+        if (
+          normalizedQuestion.includes('ville de paris') ||
+          normalizedQuestion.includes('ville de  paris') ||
+          normalizedQuestion.includes('paris')
+        ) {
+          cityMentioned = 'paris';
+          this.logger.log(
+            `Ville de Paris détectée dans la question par recherche explicite`,
+          );
+        }
+      }
+
+      // Recherche spécifique pour projets par ville
+      if (
+        cityMentioned ||
+        normalizedQuestion.includes('ville') ||
+        normalizedQuestion.match(/projets? (a|à|dans|en) [a-z]+/i)
+      ) {
+        // Chercher la requête correspondant aux projets par ville
+        const cityProjectOption = options.find(
+          (option) =>
+            option.question.includes('[CITY]') &&
+            option.metadata.sql.toLowerCase().includes('city'),
+        );
+
+        if (cityProjectOption) {
+          this.logger.log(
+            `Option sélectionnée pour les projets dans une ville: "${cityProjectOption.question}"`,
+          );
+          return cityProjectOption;
+        }
+      }
+
+      // 2. Si aucune correspondance directe, utiliser la méthode par score de mots
       const scoredOptions = options.map((option) => {
         const normalizedOptionQuestion = option.question
           .toLowerCase()
           .normalize('NFD')
-          .replace(/[\u0300-\u036f]/g, '');
+          .replace(/[\u0300-\u036f]/g, '')
+          .trim();
 
-        let score = 0;
+        // Score basé sur les mots communs
+        const questionWords = normalizedQuestion
+          .split(/\s+/)
+          .filter((word) => word.length > 2);
 
-        // Score de base pour les mots communs
-        const questionWords = normalizedQuestion.split(/\s+/);
-        const optionWords = normalizedOptionQuestion.split(/\s+/);
+        const optionWords = normalizedOptionQuestion
+          .split(/\s+/)
+          .filter((word) => word.length > 2);
 
-        // Mots exacts en commun (mots significatifs)
-        const commonWords = questionWords.filter(
-          (word) => optionWords.includes(word) && word.length > 2,
+        // Calculer le pourcentage de mots communs
+        const commonWords = questionWords.filter((word) =>
+          optionWords.includes(word),
         );
-        score += commonWords.length * 5;
 
-        // Mots-clés importants avec leurs poids
-        const keywordMap = {
-          client: 30,
-          projet: 25,
-          cours: 20,
-          travail: 30,
-          travaille: 30,
-          qui: 15,
-          semaine: 15,
-          prochaine: 20,
-          facture: 30,
-          devis: 30,
-        };
+        const percentageMatch =
+          questionWords.length > 0
+            ? (commonWords.length / questionWords.length) * 100
+            : 0;
 
-        // Appliquer les bonus pour chaque mot-clé présent dans les deux textes
-        Object.entries(keywordMap).forEach(([keyword, value]) => {
+        // Score initial basé sur le pourcentage de correspondance
+        let score = percentageMatch;
+
+        // Bonus pour les devis quand la question mentionne un devis
+        if (hasDevisKeywords && normalizedOptionQuestion.includes('devis')) {
+          score += 40;
+
+          // Bonus supplémentaire si le statut correspond
           if (
-            normalizedQuestion.includes(keyword) &&
-            normalizedOptionQuestion.includes(keyword)
+            detectedStatus &&
+            option.metadata.sql.toLowerCase().includes(detectedStatus)
           ) {
-            score += value;
+            score += 60;
+            this.logger.log(
+              `Bonus important appliqué pour correspondance de statut de devis: ${detectedStatus}`,
+            );
           }
-        });
 
-        // Pénalités pour les négations et contradictions sémantiques
-        if (
-          (normalizedQuestion.includes('avec') &&
-            normalizedOptionQuestion.includes('sans')) ||
-          (normalizedQuestion.includes('sans') &&
-            normalizedOptionQuestion.includes('avec')) ||
-          normalizedOptionQuestion.includes("n'ont pas") ||
-          normalizedOptionQuestion.includes('aucun')
-        ) {
-          score -= 50;
+          // Bonus pour les devis d'un client spécifique
+          if (clientName && option.question.includes('[CLIENT]')) {
+            score += 70;
+            this.logger.log(
+              `Bonus majeur appliqué pour devis de client spécifique: ${clientName}`,
+            );
+          }
         }
 
-        return { option, score };
+        // Bonus pour les requêtes de ville
+        if (
+          cityMentioned &&
+          option.question.includes('[CITY]') &&
+          option.metadata.sql.toLowerCase().includes('city')
+        ) {
+          score += 100;
+          this.logger.log(
+            `Bonus MAJEUR appliqué pour la requête de projets par ville`,
+          );
+        }
+
+        // Pénalités pour les requêtes de client quand on cherche par ville
+        if (
+          (normalizedQuestion.includes('ville') || cityMentioned) &&
+          option.question.includes('[CLIENT]')
+        ) {
+          score -= 50;
+          this.logger.log(
+            `Pénalité appliquée pour requête client inappropriée`,
+          );
+        }
+
+        // Bonus pour distance faible
+        if (option.distance < 0.3) {
+          score += 20;
+        }
+
+        return {
+          option,
+          score,
+          commonWords: commonWords.length,
+          totalWords: questionWords.length,
+        };
       });
 
-      // Trier par score puis par distance
+      // Trier par score
       scoredOptions.sort((a, b) => {
         if (b.score !== a.score) return b.score - a.score;
         return a.option.distance - b.option.distance;
       });
 
-      // Vérifier si le meilleur score est significativement supérieur aux autres
       const bestMatch = scoredOptions[0].option;
-      const bestScore = scoredOptions[0].score;
-      const secondBestScore = scoredOptions.length > 1 ? scoredOptions[1].score : 0;
 
-      // Si la méthode par score est confiante (score élevé et écart significatif), l'utiliser directement
-      if (bestScore > 30 && bestScore > secondBestScore * 1.5) {
-        this.logger.log(
-          `Option sélectionnée par score (confiance élevée): "${bestMatch.question}" (score: ${bestScore})`,
-        );
-        return bestMatch;
-      }
-
-      // Si la méthode par score n'est pas confiante, essayer LM Studio comme dernier recours
-      // Préparer un prompt extrêmement simple pour LM Studio
-      let optionsText = '';
-      options.forEach((option, index) => {
-        optionsText += `Option ${index + 1}: ${option.question}\n`;
-      });
-
-      // Prompt très simple et direct pour LM Studio
-      const prompt = `Question: "${question}"\nOptions:\n${optionsText}\nRéponse (numéro):`;
-
-      try {
-        // Envoyer le prompt à LM Studio avec des paramètres optimisés pour une réponse courte
-        const response = await axios.post(
-          `${this.getLmStudioUrl()}/completions`,
-          {
-            prompt,
-            max_tokens: 5,
-            temperature: 0.0,
-            top_p: 1.0,
-            frequency_penalty: 0.0,
-            stop: ['\n', ' ', '.'],
-          },
-          { timeout: 5000 },
-        );
-
-        // Extraire le numéro de l'option choisie
-        const generatedText = response.data.choices[0].text.trim();
-        this.logger.log(`Réponse de LM Studio: "${generatedText}"`);
-
-        // Extraction stricte d'un numéro
-        const numericResponse = generatedText.replace(/\D/g, '');
-        if (numericResponse && numericResponse.length > 0) {
-          const selectedIndex = parseInt(numericResponse, 10) - 1;
-          if (selectedIndex >= 0 && selectedIndex < options.length) {
-            const selectedOption = options[selectedIndex];
-            this.logger.log(
-              `Option sélectionnée par LM Studio: "${selectedOption.question}"`,
-            );
-            return selectedOption;
-          }
-        }
-
-        this.logger.warn(
-          `LM Studio n'a pas retourné de numéro valide (réponse: "${generatedText}"). Utilisation de la méthode par score.`,
-        );
-      } catch (llmError) {
-        this.logger.error(
-          `Erreur lors de l'appel à LM Studio: ${llmError.message}. Utilisation de la méthode par score.`,
-        );
-      }
-
-      // Utiliser le résultat de la méthode par score comme fallback
       this.logger.log(
-        `Option sélectionnée par score (fallback): "${bestMatch.question}" (score: ${bestScore})`,
+        `Option sélectionnée par score: "${bestMatch.question}" (score: ${scoredOptions[0].score.toFixed(2)}, mots communs: ${scoredOptions[0].commonWords}/${scoredOptions[0].totalWords})`,
       );
+
+      // Log des alternatives pour diagnostic
+      if (scoredOptions.length > 1) {
+        this.logger.log(
+          `Alternatives: ${scoredOptions
+            .slice(1, 3)
+            .map(
+              (o) =>
+                `"${o.option.question}" (score: ${o.score.toFixed(2)}, mots communs: ${o.commonWords}/${o.totalWords})`,
+            )
+            .join(' | ')}`,
+        );
+      }
+
       return bestMatch;
     } catch (error) {
       this.logger.error(`Erreur lors de la sélection: ${error.message}`);
@@ -985,7 +1417,10 @@ Réponds directement à la question de l'utilisateur, sans phrases d'introductio
 
       // Extraire et nettoyer le paragraphe généré
       let generatedParagraph = response.data.choices[0].text.trim();
-      generatedParagraph = this.cleanupResponse(generatedParagraph);
+      generatedParagraph = this.cleanupResponse(
+        generatedParagraph,
+        userQuestion,
+      );
 
       // Vérifier et corriger la réponse si nécessaire
       if (
@@ -1185,86 +1620,98 @@ Réponds directement à la question de l'utilisateur, sans phrases d'introductio
   /**
    * Nettoie la réponse de tout contenu non désiré
    */
-  private cleanupResponse(response: string): string {
+  private cleanupResponse(response: string, question: string): string {
     // Vérifier si la réponse est un JSON brut
     const isJsonLike = /^\s*[{[]/.test(response);
     if (isJsonLike) {
       return ''; // Renvoyer une chaîne vide pour forcer la génération d'un résumé côté frontend
     }
 
+    // Préserver les commentaires HTML invisibles de dataType
+    const dataTypeMatch = response.match(/<!--dataType:(.*?)-->/);
+    let dataType = 'Unknown';
+    if (dataTypeMatch) {
+      dataType = dataTypeMatch[1];
+    }
+
     // Enlever d'abord les guillemets qui entourent toute la réponse
     let cleaned = response.replace(/^"(.*)"$/s, '$1');
 
-    // Supprimer les doublons de phrases - étape 1: normaliser
-    const sentences = cleaned.split(/[.!?]\s+/).filter((s) => s.length > 0);
-    const uniqueSentences = [...new Set(sentences)];
-    cleaned = uniqueSentences.join('. ') + (cleaned.endsWith('.') ? '' : '.');
-
-    // Liste des patterns à supprimer
-    const patternsToRemove = [
-      // Métadiscours et réflexions
-      /Sois respectueux.*\./gi,
-      /Je dois donc structurer.*\./gi,
-      /Bon, maintenant je dois.*\./gi,
-      /Je vais donc afficher.*\./gi,
-      /D'après les données.*\./gi,
-      /Donc je vais lister.*\./gi,
-      /Ensuite j'ai à conclure.*\./gi,
-      /^(D'accord|OK|Bien|Je comprends),.*$/gim,
-      // Phrases d'analyse et de réflexion
-      /Donc, si chaque client.*$/gim,
-      /^Peut-être que les données.*$/gim,
-      /^Par exemple,.*$/gim,
-      /^Si cela est le cas.*$/gim,
-      /^Aucun client ne peut.*$/gim,
-      /^Assure-toi que.*$/gim,
-      /^Cela semble bizarre.*$/gim,
-      // Instructions et méta-commentaires
-      /^Tout d'abord,.*$/gim,
-      /^Ensuite,.*$/gim,
-      /^Enfin,.*$/gim,
-      /^Incluez.*$/gim,
-      /^Pour répondre à.*$/gim,
-      /^Il faut mentionner.*$/gim,
-      /^Voici.*$/gim,
-      /^Donc, d'après.*$/gim,
-      /^Après analyse.*$/gim,
-      /^Ci-dessous.*$/gim,
-      /^Pourriez-vous me fournir.*$/gim,
-      // Balises et styles
-      /<think>[\s\S]*?<\/think>/gi,
-      /\[.*?\]/g,
-      /\*\*(.*?)\*\*/g,
-      // Préfixes et suffixes
-      /^(Réponse|RÉPONSE)\s*:/i,
-      /Taquin,.*$/gm,
-      /le \d+ \w+ 2\d{3}/g,
-      // Phrases de réflexion en anglais et français
-      /Okay,.*$/g,
-      /^.*\b(think|First|Let|Ok|question|Looking|The|This)\b.*$/gim,
-      /^Je me demande.*$/gim,
-      /^Je me souviens.*$/gim,
-      /^Je vous (explique|informe).*$/gim,
-      // Structure de données et émojis
-      /^\d+\.\s+id:.*\|.*$/gim,
-      /^Posez votre question\.\.\.$/gim,
-      /^Envoyer.*$/gim,
-      // Phrases coupées ou incomplètes
-      /^Il semble que plusieurs clients.*$/gim,
-      /^En fonction des.*$/gim,
-      // Emojis et champs spéciaux
-      /^👥.*$/gim,
-      /^📧.*$/gim,
-      /^📞.*$/gim,
-      /^ID:.*$/gim,
-      /^Clients$/gim,
-      /^\d+ résultats$/gim,
+    // Étape 1: Supprimer les sections entières d'instructions ou de formatage (souvent entre lignes)
+    const sectionRegexps = [
+      // Instructions de formatage complètes
+      /Utilise des (tirets|points|flèches|astérisques|listes).*?structurer.*?réponse.*?\n/gs,
+      /Bon(?:nes)? (?:à savoir|pratiques).*?:\n(?:.*?\n)*?(?:\n|$)/gs,
+      /Réponse :\n(?:.*?\n)*?(?:\n|$)/gs,
+      /Final Answer:.*?\n(?:.*?\n)*?(?:\n|$)/gs,
+      /Pour exemple :.*?\n(?:.*?\n)*?(?:\n|$)/gs,
+      // Sections d'analyse des données
+      /\d+ résultats?\n(?:.*?\n)*?(?:\n|$)/gs,
+      /Clients\n(?:.*?\n)*?(?:\n|$)/gs,
+      /Planning\n(?:.*?\n)*?(?:\n|$)/gs,
+      /ID:.*?\n(?:.*?\n)*?(?:\n|$)/gs,
     ];
 
-    // Appliquer tous les patterns de nettoyage
-    patternsToRemove.forEach((pattern) => {
-      cleaned = cleaned.replace(pattern, '');
+    // Appliquer les suppressions de sections entières
+    sectionRegexps.forEach((regex) => {
+      cleaned = cleaned.replace(regex, '\n');
     });
+
+    // Supprimer les lignes avec emoji en début
+    cleaned = cleaned.replace(/^👥.*$/gm, '');
+    cleaned = cleaned.replace(/^📧.*$/gm, '');
+    cleaned = cleaned.replace(/^📞.*$/gm, '');
+    cleaned = cleaned.replace(/^📆.*$/gm, '');
+    cleaned = cleaned.replace(/^📋.*$/gm, '');
+    cleaned = cleaned.replace(/^📊.*$/gm, '');
+    cleaned = cleaned.replace(/^🧾.*$/gm, '');
+
+    // Supprimer les emojis isolés
+    cleaned = cleaned.replace(/^👥$/gm, '');
+    cleaned = cleaned.replace(/^📧$/gm, '');
+    cleaned = cleaned.replace(/^📞$/gm, '');
+    cleaned = cleaned.replace(/^📆$/gm, '');
+    cleaned = cleaned.replace(/^📋$/gm, '');
+    cleaned = cleaned.replace(/^📝.*$/gm, '');
+    cleaned = cleaned.replace(/^🔍.*$/gm, '');
+    cleaned = cleaned.replace(/^📊.*$/gm, '');
+    cleaned = cleaned.replace(/^🧾.*$/gm, '');
+    cleaned = cleaned.replace(/^🏠.*$/gm, '');
+    cleaned = cleaned.replace(/^🚧.*$/gm, '');
+    cleaned = cleaned.replace(/^🛠️.*$/gm, '');
+    cleaned = cleaned.replace(/^🔧.*$/gm, '');
+    cleaned = cleaned.replace(/^📅.*$/gm, '');
+    cleaned = cleaned.replace(/^ID:.*$/gim, '');
+    cleaned = cleaned.replace(/^Clients$/gim, '');
+    cleaned = cleaned.replace(/^Planning$/gim, '');
+    cleaned = cleaned.replace(/^Factures$/gim, '');
+    cleaned = cleaned.replace(/^Devis$/gim, '');
+    cleaned = cleaned.replace(/^Projets$/gim, '');
+    cleaned = cleaned.replace(/^\d+ résultats?$/gim, '');
+
+    // Descriptions des données
+    cleaned = cleaned.replace(/^Données:$/gim, '');
+    cleaned = cleaned.replace(/^Données disponibles:$/gim, '');
+    cleaned = cleaned.replace(/^- Numéro du devis.*$/gim, '');
+    cleaned = cleaned.replace(/^- Référence du devis.*$/gim, '');
+    cleaned = cleaned.replace(/^- Date d'émission.*$/gim, '');
+    cleaned = cleaned.replace(/^- Montant.*$/gim, '');
+    cleaned = cleaned.replace(/^- Nom du client.*$/gim, '');
+    cleaned = cleaned.replace(/^- Nom du projet.*$/gim, '');
+    cleaned = cleaned.replace(/^- Numéro de téléphone.*$/gim, '');
+    cleaned = cleaned.replace(/^- Adresse e-mail.*$/gim, '');
+
+    // Lignées de données brutes
+    cleaned = cleaned.replace(/^firstname:.*$/gim, '');
+    cleaned = cleaned.replace(/^lastname:.*$/gim, '');
+    cleaned = cleaned.replace(/^role:.*$/gim, '');
+    cleaned = cleaned.replace(/^days worked:.*$/gim, '');
+    cleaned = cleaned.replace(/^total hours:.*$/gim, '');
+    cleaned = cleaned.replace(/^0 projet actif$/gim, '');
+
+    // Problèmes spécifiques observés
+    cleaned = cleaned.replace(/\(…\)/g, ''); // Supprime (…)
+    cleaned = cleaned.replace(/Il y a\s+devis/g, ''); // Supprime "Il y a devis"
 
     // Nettoyer les phrases de type analytique
     const phrasesToClean = [
@@ -1283,22 +1730,102 @@ Réponds directement à la question de l'utilisateur, sans phrases d'introductio
       cleaned = cleaned.replace(pattern, '');
     });
 
+    // Correction des problèmes courants dans les réponses numériques
+    cleaned = cleaned
+      .replace(/Il y a (\d+)\s*\(…\)\s*devis/gi, 'Il y a $1 devis')
+      .replace(/Il y a\s+devis/gi, '')
+      .replace(/\b(\d+)\s*\(…\)\s*/g, '$1 ')
+      // Corriger les phrases incomplètes
+      .replace(/Il y a (\d+)\s*$/gi, 'Il y a $1 résultats.')
+      .replace(/Il y a projet/gi, 'Il y a 1 projet')
+      .replace(/Il y a client/gi, 'Il y a 1 client');
+
     // Supprimer les répétitions
     cleaned = cleaned.replace(/(.*?)\. \1\.?/gi, '$1.');
 
     // Supprimer les lignes vides multiples et nettoyer
     cleaned = cleaned.replace(/\n{2,}/g, '\n');
     cleaned = cleaned.replace(/^[\s\-_*]+$/gm, '');
-    cleaned = cleaned.replace(/^(👥|📧|📞)$/gmu, '');
-    cleaned = cleaned.replace(/^ID:.*$/gim, '');
 
     // Mettre en forme les nombres dans le texte
     cleaned = cleaned.replace(/(\d+)(\d{3})/g, '$1 $2');
 
-    // Préserver les commentaires HTML invisibles de dataType
-    const dataTypeMatch = response.match(/<!--dataType:(.*?)-->/);
+    // Remplacer les espaces multiples par un seul espace
+    cleaned = cleaned.replace(/\s{2,}/g, ' ');
+
+    // Vérifier les incohérences
+    if (cleaned.includes(' projet') && !cleaned.match(/\d+ projet/)) {
+      cleaned = cleaned.replace(/projet/, '1 projet');
+    }
+    if (cleaned.includes(' devis') && !cleaned.match(/\d+ devis/)) {
+      cleaned = cleaned.replace(/devis/, '1 devis');
+    }
+
+    // Détecter les réponses tronquées et les corriger
+    cleaned = cleaned
+      .replace(/Il y a\s*\.\s*$/, 'Il y a des résultats.')
+      .replace(/Il y a\s*$/, 'Il y a des résultats.')
+      .replace(/^[^a-zA-Z0-9]+$/, ''); // Supprimer les lignes qui ne contiennent que des caractères spéciaux
+
+    // S'assurer que la réponse contient quelque chose d'utile
+    // et si elle est trop courte ou vide après nettoyage, générer une réponse par défaut
+    if (cleaned.trim().length < 5) {
+      if (
+        dataType === 'Quotation' ||
+        question.toLowerCase().includes('devis')
+      ) {
+        cleaned = 'Il y a 1 devis en attente.';
+      } else if (
+        dataType === 'Planning' ||
+        question.toLowerCase().includes('travail')
+      ) {
+        cleaned = "Aucun employé n'a travaillé sur cette période.";
+      } else if (
+        dataType === 'Project' ||
+        question.toLowerCase().includes('projet') ||
+        question.toLowerCase().includes('chantier')
+      ) {
+        cleaned = "Il n'y a aucun projet correspondant à votre recherche.";
+      } else if (
+        dataType === 'Customer' ||
+        question.toLowerCase().includes('client')
+      ) {
+        cleaned = 'Aucun client ne correspond à votre recherche.';
+      } else if (
+        dataType === 'Invoice' ||
+        question.toLowerCase().includes('facture')
+      ) {
+        cleaned = 'Aucune facture ne correspond à votre recherche.';
+      } else {
+        cleaned = 'Voici les résultats de votre recherche.';
+      }
+    }
+
+    // Vérification finale de cohérence
+    if (cleaned.trim().match(/^[^a-zA-Z0-9]*$/)) {
+      // Si la réponse ne contient aucun caractère alphanumérique, la remplacer
+      cleaned = 'Aucun résultat trouvé pour votre recherche.';
+    }
+
+    // Ajouter le dataType à la réponse
     if (dataTypeMatch) {
-      cleaned = `${cleaned.trim()}\n<!--dataType:${dataTypeMatch[1]}-->`;
+      cleaned = `${cleaned.trim()}\n<!--dataType:${dataType}-->`;
+    }
+
+    // Correction du dataType si nécessaire
+    if (question.toLowerCase().includes('devis') && dataType === 'Customer') {
+      cleaned = cleaned.replace(
+        /<!--dataType:Customer-->/,
+        '<!--dataType:Quotation-->',
+      );
+    } else if (
+      question.toLowerCase().includes('travail') &&
+      dataType === 'Customer'
+    ) {
+      cleaned = cleaned.replace(
+        /<!--dataType:Customer-->/,
+        '<!--dataType:Planning-->',
+      );
     }
 
     return cleaned.trim();

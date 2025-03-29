@@ -1,0 +1,264 @@
+type: collection.insomnia.rest/5.0
+name: Chatbot
+meta:
+  id: wrk_d265d55f38c04e6b92633e460baad597
+  created: 1742823879231
+  modified: 1742823879231
+collection:
+  - name: Rag
+    meta:
+      id: fld_a6236db68c9f4cf9bc5811fc5f667d75
+      created: 1742823885436
+      modified: 1742823885436
+      sortKey: -1742823885436
+    children:
+      - url: http://localhost:3002/rag/similar
+        name: Rag Similar
+        meta:
+          id: req_3faf9a538a5844d4b0f7aeb409c99ce3
+          created: 1742824254645
+          modified: 1743166362562
+          isPrivate: false
+          sortKey: -1742824254645
+        method: POST
+        body:
+          mimeType: application/json
+          text: |-
+            {
+            	"question": "quel est lke planning de la smaine pro",
+              "nResults": 5
+            }
+        headers:
+          - name: Content-Type
+            value: application/json
+          - name: User-Agent
+            value: insomnia/11.0.0
+        settings:
+          renderRequestBody: true
+          encodeUrl: true
+          followRedirects: global
+          cookies:
+            send: true
+            store: true
+          rebuildPath: true
+      - url: http://localhost:3002/rag/questions
+        name: Rag Question
+        meta:
+          id: req_61078bf232134671b988d401e5c6432e
+          created: 1742824508365
+          modified: 1743086277054
+          isPrivate: false
+          sortKey: -1742693378106.5
+        method: GET
+        body:
+          mimeType: application/json
+          text: |-
+            {
+              "question": "qui travail demain  ?"
+            }
+        headers:
+          - name: Content-Type
+            value: application/json
+          - name: User-Agent
+            value: insomnia/11.0.0
+        settings:
+          renderRequestBody: true
+          encodeUrl: true
+          followRedirects: global
+          cookies:
+            send: true
+            store: true
+          rebuildPath: true
+      - url: http://localhost:3002/rag/reload-sql-queries
+        name: Reload Queries
+        meta:
+          id: req_6cb3b70854a347efbbbcddf476c1b324
+          created: 1742825268170
+          modified: 1742919847975
+          isPrivate: false
+          sortKey: -1742627939837.25
+        method: POST
+        body:
+          mimeType: application/json
+          text: |-
+            {
+            	"collection":"questions_collection"
+            }
+        headers:
+          - name: Content-Type
+            value: application/json
+          - name: User-Agent
+            value: insomnia/11.0.0
+        settings:
+          renderRequestBody: true
+          encodeUrl: true
+          followRedirects: global
+          cookies:
+            send: true
+            store: true
+          rebuildPath: true
+      - url: http://localhost:3002/rag/similar?question=Quels sont les clients de
+          Paris&limit=10
+        name: Get Rag Similar
+        meta:
+          id: req_7b8e7f891a2f499a987ff1a99b9eb8c1
+          created: 1742827143292
+          modified: 1742992659861
+          isPrivate: false
+          sortKey: -1742726097241.125
+        method: GET
+        headers:
+          - name: User-Agent
+            value: insomnia/11.0.0
+        settings:
+          renderRequestBody: true
+          encodeUrl: true
+          followRedirects: global
+          cookies:
+            send: true
+            store: true
+          rebuildPath: true
+      - url: http://localhost:3002/rag/collections
+        name: Get Collections
+        meta:
+          id: req_a3fb32ce8da04020977b96a54bd94319
+          created: 1742992630851
+          modified: 1742992656235
+          isPrivate: false
+          sortKey: -1742824254745
+        method: GET
+        headers:
+          - name: User-Agent
+            value: insomnia/11.0.0
+        settings:
+          renderRequestBody: true
+          encodeUrl: true
+          followRedirects: global
+          cookies:
+            send: true
+            store: true
+          rebuildPath: true
+      - url: http://localhost:3002/rag/collection-count?collection=sql_queries
+        name: Get Collections count
+        meta:
+          id: req_4febea4f8a7f4208a74ecffb8fd72269
+          created: 1742992962604
+          modified: 1742992975564
+          isPrivate: false
+          sortKey: -1742824254695
+        method: GET
+        headers:
+          - name: User-Agent
+            value: insomnia/11.0.0
+        settings:
+          renderRequestBody: true
+          encodeUrl: true
+          followRedirects: global
+          cookies:
+            send: true
+            store: true
+          rebuildPath: true
+  - name: Chatbot
+    meta:
+      id: fld_402c163e83854d20851360f79ea4b4b3
+      created: 1742829254966
+      modified: 1742829259737
+      sortKey: -1742829254966
+    children:
+      - url: http://localhost:3001/ai/query
+        name: Question
+        meta:
+          id: req_dc40ebd66e8a4327a8bd5835f8f29b16
+          created: 1742829276396
+          modified: 1742909033941
+          isPrivate: false
+          sortKey: -1742829276396
+        method: POST
+        body:
+          mimeType: application/json
+          text: |-
+            {
+            	"question": "quel sont les chantiers du mois ?"
+            }
+        headers:
+          - name: Content-Type
+            value: application/json
+          - name: User-Agent
+            value: insomnia/11.0.0
+        settings:
+          renderRequestBody: true
+          encodeUrl: true
+          followRedirects: global
+          cookies:
+            send: true
+            store: true
+          rebuildPath: true
+      - url: "http://localhost:3001/model/query-run                       "
+        name: Query Run
+        meta:
+          id: req_2e6c332afdc54779893bc7e7ed378606
+          created: 1742909400081
+          modified: 1743169564158
+          isPrivate: false
+          sortKey: -1742826765520.5
+        method: POST
+        body:
+          mimeType: application/json
+          text: |-
+            {
+            	"question": "Quels sont les projets a paris  ?"
+            }
+        headers:
+          - name: Content-Type
+            value: application/json
+          - name: User-Agent
+            value: insomnia/11.0.0
+        settings:
+          renderRequestBody: true
+          encodeUrl: true
+          followRedirects: global
+          cookies:
+            send: true
+            store: true
+          rebuildPath: true
+      - url: http://localhost:3001/analyze/question
+        name: Question analyze
+        meta:
+          id: req_4f78d371020a4bfcb900d72044e5282a
+          created: 1743084987028
+          modified: 1743166375139
+          isPrivate: false
+          sortKey: -1742828020958.25
+        method: POST
+        body:
+          mimeType: application/json
+          text: |-
+            {
+            "question": "quel est lke planning de la smaine pro?"
+            }
+        headers:
+          - name: Content-Type
+            value: application/json
+          - name: User-Agent
+            value: insomnia/11.0.0
+        settings:
+          renderRequestBody: true
+          encodeUrl: true
+          followRedirects: global
+          cookies:
+            send: true
+            store: true
+          rebuildPath: true
+cookieJar:
+  name: Default Jar
+  meta:
+    id: jar_8df2eee960c88f795deca0797ebf9efa5312df5b
+    created: 1742823879236
+    modified: 1742823879236
+environments:
+  name: Base Environment
+  meta:
+    id: env_8df2eee960c88f795deca0797ebf9efa5312df5b
+    created: 1742823879234
+    modified: 1742823879234
+    isPrivate: false

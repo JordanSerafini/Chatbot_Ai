@@ -441,4 +441,17 @@ export class RagController {
       );
     }
   }
+
+  @Get('questions')
+  async getAllQuestions(): Promise<string[]> {
+    try {
+      return await this.chromaService.getAllQuestions();
+    } catch (error) {
+      this.logger.error('Erreur lors de la récupération des questions:', error);
+      throw new HttpException(
+        'Erreur lors de la récupération des questions',
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
+  }
 }

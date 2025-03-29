@@ -208,6 +208,8 @@ export class ChromaService implements OnModuleInit {
           `Collections disponibles: ${JSON.stringify(collections)}`,
         );
 
+        // Importante modification: on utilise toujours le même nom de collection
+        // au lieu d'un UUID
         if (collections.includes(this.COLLECTION_NAME)) {
           // On récupère la collection existante
           const params: GetCollectionParams = {
@@ -215,8 +217,14 @@ export class ChromaService implements OnModuleInit {
             embeddingFunction: this.embeddingFunction,
           };
           this.collection = await this.client.getCollection(params);
+          this.logger.log(
+            `Collection ${this.COLLECTION_NAME} récupérée avec succès`,
+          );
         } else {
           // On crée la collection
+          this.logger.log(
+            `Création de la collection ${this.COLLECTION_NAME}...`,
+          );
           this.collection = await this.client.createCollection({
             name: this.COLLECTION_NAME,
             metadata: {
@@ -224,11 +232,14 @@ export class ChromaService implements OnModuleInit {
             },
             embeddingFunction: this.embeddingFunction,
           });
+          this.logger.log(
+            `Collection ${this.COLLECTION_NAME} créée avec succès`,
+          );
         }
+      }
 
-        this.logger.log(
-          'Collection récupérée/créée avec succès dans addQuestions',
-        );
+      if (!this.collection) {
+        throw new Error("Impossible d'initialiser la collection");
       }
 
       const ids = questions.map((q) => q.id);
@@ -238,11 +249,15 @@ export class ChromaService implements OnModuleInit {
         description: q.description,
       }));
 
+      this.logger.log(
+        `Ajout de ${ids.length} questions à la collection ${this.COLLECTION_NAME}`,
+      );
       await this.collection.add({
         ids,
         documents,
         metadatas,
       });
+      this.logger.log('Questions ajoutées avec succès');
     });
   }
 
@@ -513,5 +528,28 @@ export class ChromaService implements OnModuleInit {
 
       throw error;
     }
+  }
+
+  async getAllQuestions(): Promise<string[]> {
+    return this.executeWithRetry(async () => {
+      if (!this.collection) {
+        this.logger.error('Collection non initialisée dans getAllQuestions');
+        return [];
+      }
+
+      try {
+        const results = await this.collection.get();
+        if (!results || !results.documents) {
+          return [];
+        }
+        return results.documents as string[];
+      } catch (error) {
+        this.logger.error(
+          'Erreur lors de la récupération des questions:',
+          error,
+        );
+        return [];
+      }
+    });
   }
 }
