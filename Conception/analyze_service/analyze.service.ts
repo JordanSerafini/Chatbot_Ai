@@ -24,22 +24,14 @@ export class AnalyseService {
 
   async analyzeQuestion(question: string): Promise<string> {
     try {
-      const similarQuestions = await this.getSimilarQuestions(question);
-      return `Analyzed question: ${question}`;
+      console.log(question);
     } catch (e) {
-      this.logger.error(e);
-      throw e;
+      console.log(e);
     }
   }
 
-  private async getSimilarQuestions(question: string): Promise<RagQuestion> {
-    try {
-      const ragServiceUrl = this.configService.get<string>('RAG_SERVICE_URL');
-      const response = await axios.post(`${ragServiceUrl}/rag/similar`, { question });
-      return response.data;
-    } catch (error) {
-      this.logger.error('Error getting similar questions:', error);
-      throw error;
-    }
+  private getSimilarQuestions(question: string): Promise<RagQuestion> {
+  try {
+    cons
   }
 }
