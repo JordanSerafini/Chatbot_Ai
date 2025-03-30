@@ -1,5 +1,4 @@
 services:
-
   postgres:
     container_name: postgres
     image: ankane/pgvector:latest
