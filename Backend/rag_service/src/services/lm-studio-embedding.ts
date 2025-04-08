@@ -15,6 +15,10 @@ export class LmStudioEmbeddingFunction implements IEmbeddingFunction {
   private embeddingCache: Map<string, number[]> = new Map();
   // Version API (v1 ou non)
   private isApiV1: boolean = true;
+  // Flag pour vérifier si l'API d'embeddings native est disponible
+  private hasEmbeddingsApi: boolean = true;
+  // Flag pour vérifier si la vérification initiale a été effectuée
+  private initialCheckDone: boolean = false;
 
   constructor(private configService: ConfigService) {
     this.lmStudioUrl = this.getLmStudioUrl();
@@ -23,6 +27,33 @@ export class LmStudioEmbeddingFunction implements IEmbeddingFunction {
     );
     // Détecter automatiquement la version de l'API
     void this.detectApiVersion(); // Utilisation de void pour ignorer explicitement la promesse
+    // Vérifier une seule fois au démarrage si l'API d'embeddings est disponible
+    void this.checkEmbeddingsApiAvailability();
+  }
+
+  private async checkEmbeddingsApiAvailability(): Promise<void> {
+    try {
+      // Essai avec un texte très court et un timeout réduit
+      await axios.post(
+        `${this.lmStudioUrl}/embeddings`,
+        {
+          input: 'test',
+          model: 'embedding',
+        },
+        { timeout: 3000 }, // Timeout réduit pour un test rapide
+      );
+
+      this.hasEmbeddingsApi = true;
+      this.logger.log('Embeddings API is available!');
+    } catch (error) {
+      console.log(error);
+
+      this.hasEmbeddingsApi = false;
+      this.logger.warn(
+        'Embeddings API is not available. Will use chat API for embeddings generation.',
+      );
+    }
+    this.initialCheckDone = true;
   }
 
   private async detectApiVersion(): Promise<void> {
@@ -33,7 +64,8 @@ export class LmStudioEmbeddingFunction implements IEmbeddingFunction {
       this.logger.log('Detected LM Studio API v1');
     } catch (error) {
       console.log(error);
-
+      // Préfixer avec _ pour indiquer qu'il est intentionnellement non utilisé
+      // Si échec, essayer sans le préfixe v1
       try {
         const baseUrl = this.lmStudioUrl.replace('/v1', '');
         await axios.get(`${baseUrl}/models`, { timeout: 5000 });
@@ -41,7 +73,9 @@ export class LmStudioEmbeddingFunction implements IEmbeddingFunction {
         this.isApiV1 = false;
         this.logger.log('Detected non-v1 LM Studio API');
       } catch (secondError) {
-        console.log('secondError', secondError);
+        console.log(secondError);
+
+        // Préfixer avec _ pour indiquer qu'il est intentionnellement non utilisé
         this.logger.warn(
           'Could not detect API version, defaulting to v1. Embeddings may not work correctly.',
         );
@@ -52,7 +86,7 @@ export class LmStudioEmbeddingFunction implements IEmbeddingFunction {
   private getLmStudioUrl(): string {
     const url =
       this.configService.get<string>('LM_STUDIO_URL') ||
-      'https://6ec0-2a01-cb15-4c5-c200-ff2e-b498-e114-f0c2.ngrok-free.app';
+      'https://7b90-2a01-cb15-4c5-c200-ff2e-b498-e114-f0c2.ngrok-free.app';
 
     // Assurer que l'URL se termine par /v1 si nécessaire
     if (!url.endsWith('/v1')) {
@@ -70,6 +104,11 @@ export class LmStudioEmbeddingFunction implements IEmbeddingFunction {
     this.logger.log(
       `Generating embeddings for ${texts.length} texts using LM Studio`,
     );
+
+    // Attendre que la vérification initiale soit terminée
+    if (!this.initialCheckDone) {
+      await this.checkEmbeddingsApiAvailability();
+    }
 
     try {
       const embeddings: number[][] = [];
@@ -105,65 +144,73 @@ export class LmStudioEmbeddingFunction implements IEmbeddingFunction {
     }
 
     try {
-      // Essayer d'abord avec l'API d'embeddings (si disponible)
-      try {
-        const response = await axios.post(
-          `${this.lmStudioUrl}/embeddings`,
-          {
-            input: text,
-            model: 'embedding',
-          },
-          { timeout: 10000 },
-        );
+      // Si l'API d'embeddings est disponible, l'utiliser, sinon passer directement à l'API de chat
+      if (this.hasEmbeddingsApi) {
+        try {
+          const response = await axios.post(
+            `${this.lmStudioUrl}/embeddings`,
+            {
+              input: text,
+              model: 'embedding',
+            },
+            { timeout: 10000 },
+          );
 
-        // Si ça fonctionne, utiliser l'embedding retourné
-        const embedding = response.data.data[0].embedding;
-        // Mettre en cache
-        this.embeddingCache.set(textHash, embedding);
-        return embedding;
-      } catch (embeddingError) {
-        // Si l'API d'embeddings n'est pas disponible, utiliser l'API de chat/completions
-        this.logger.warn(
-          `Embeddings API not available: ${embeddingError.message}. Falling back to chat API.`,
-        );
+          // Si ça fonctionne, utiliser l'embedding retourné
+          const embedding = response.data.data[0].embedding;
+          // Mettre en cache
+          this.embeddingCache.set(textHash, embedding);
+          return embedding;
+        } catch (embeddingError) {
+          // Si c'est la première erreur, désactiver l'API d'embeddings pour les futurs appels
+          if (this.hasEmbeddingsApi) {
+            this.hasEmbeddingsApi = false;
+            this.logger.warn(
+              `Embeddings API not available: ${embeddingError.message}. Falling back to chat API for all future requests.`,
+            );
+          }
 
-        // Déterminer l'endpoint de chat à utiliser
-        const chatEndpoint = this.isApiV1
-          ? '/chat/completions'
-          : '/v1/chat/completions';
-
-        // Utiliser l'API de chat pour générer une représentation du texte
-        const response = await axios.post(
-          this.lmStudioUrl + chatEndpoint,
-          {
-            messages: [
-              {
-                role: 'system',
-                content:
-                  'Extract all key concepts and themes from the following text as a comma-separated list.',
-              },
-              { role: 'user', content: text },
-            ],
-            temperature: 0.1,
-            max_tokens: 50,
-          },
-          { timeout: 10000 },
-        );
-
-        // Extraire le texte généré
-        let chatResponse;
-        if (response.data.choices && response.data.choices.length > 0) {
-          chatResponse = response.data.choices[0].message?.content || '';
-        } else {
-          chatResponse = '';
+          // Continuer avec l'API de chat
         }
-
-        // Convertir la réponse textuelle en vecteur numérique
-        const embedding = this.textToVector(chatResponse, text);
-        // Mettre en cache
-        this.embeddingCache.set(textHash, embedding);
-        return embedding;
       }
+
+      // Utiliser l'API de chat comme alternative
+      // Déterminer l'endpoint de chat à utiliser
+      const chatEndpoint = this.isApiV1
+        ? '/chat/completions'
+        : '/v1/chat/completions';
+
+      // Utiliser l'API de chat pour générer une représentation du texte
+      const response = await axios.post(
+        this.lmStudioUrl + chatEndpoint,
+        {
+          messages: [
+            {
+              role: 'system',
+              content:
+                'Extract all key concepts and themes from the following text as a comma-separated list.',
+            },
+            { role: 'user', content: text },
+          ],
+          temperature: 0.1,
+          max_tokens: 50,
+        },
+        { timeout: 10000 },
+      );
+
+      // Extraire le texte généré
+      let chatResponse;
+      if (response.data.choices && response.data.choices.length > 0) {
+        chatResponse = response.data.choices[0].message?.content || '';
+      } else {
+        chatResponse = '';
+      }
+
+      // Convertir la réponse textuelle en vecteur numérique
+      const embedding = this.textToVector(chatResponse, text);
+      // Mettre en cache
+      this.embeddingCache.set(textHash, embedding);
+      return embedding;
     } catch (error) {
       this.logger.error(
         `Error generating embedding for text: ${error.message}`,
