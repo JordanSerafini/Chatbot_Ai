@@ -13,8 +13,6 @@ export class InitService implements OnModuleInit {
 
   async onModuleInit() {
     try {
-      // Attendre que ChromaDB soit complètement démarré
-      // Augmenter ce délai car ChromaDB peut prendre plus de temps à démarrer
       this.logger.log('Attente du démarrage complet de ChromaDB...');
       await new Promise((resolve) => setTimeout(resolve, 10000));
 

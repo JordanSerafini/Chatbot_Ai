@@ -7,6 +7,7 @@ import {
 } from 'chromadb';
 import { Question, SimilarQuestion } from '../interfaces/question.interface';
 import { ConfigService } from '@nestjs/config';
+import { LmStudioEmbeddingFunction } from './lm-studio-embedding';
 
 @Injectable()
 export class ChromaService implements OnModuleInit {
@@ -14,7 +15,7 @@ export class ChromaService implements OnModuleInit {
   private client: ChromaClient;
   private collection: Collection | undefined;
   private readonly COLLECTION_NAME = 'questions_collection';
-  private readonly embeddingFunction = new DefaultEmbeddingFunction();
+  private readonly embeddingFunction;
   private connectionRetries = 0;
   private readonly MAX_RETRIES = 10;
   private readonly RETRY_DELAY = 5000; // 5 secondes
@@ -26,6 +27,22 @@ export class ChromaService implements OnModuleInit {
     this.client = new ChromaClient({
       path: chromaUrl,
     });
+    
+    // Utiliser LmStudioEmbeddingFunction si LM_STUDIO_URL est définie, sinon utiliser DefaultEmbeddingFunction
+    const lmStudioUrl = this.configService.get<string>('LM_STUDIO_URL');
+    if (lmStudioUrl) {
+      this.logger.log(
+        `Utilisation de LmStudioEmbeddingFunction avec l'URL: ${lmStudioUrl}`,
+      );
+      this.embeddingFunction = new LmStudioEmbeddingFunction(
+        this.configService,
+      );
+    } else {
+      this.logger.log(
+        'LM_STUDIO_URL non définie, utilisation de DefaultEmbeddingFunction',
+      );
+      this.embeddingFunction = new DefaultEmbeddingFunction();
+    }
   }
 
   async onModuleInit() {
