@@ -111,7 +111,7 @@ export class LmStudioEmbeddingFunction implements IEmbeddingFunction {
     this.processedCount = 0;
     this.startTime = Date.now();
     this.lastLogTime = this.startTime;
-    
+
     this.logger.log(
       `Démarrage de la génération d'embeddings pour ${this.totalCount} textes avec LM Studio...`,
     );
@@ -123,16 +123,20 @@ export class LmStudioEmbeddingFunction implements IEmbeddingFunction {
 
     try {
       const embeddings: number[][] = [];
-      const cachedCount = texts.filter(text => this.embeddingCache.has(this.hashText(text))).length;
+      const cachedCount = texts.filter((text) =>
+        this.embeddingCache.has(this.hashText(text)),
+      ).length;
       if (cachedCount > 0) {
-        this.logger.log(`${cachedCount} textes déjà en cache (${Math.round(cachedCount/this.totalCount*100)}%)`);
+        this.logger.log(
+          `${cachedCount} textes déjà en cache (${Math.round((cachedCount / this.totalCount) * 100)}%)`,
+        );
       }
 
       // Traiter chaque texte individuellement pour plus de robustesse
       for (const text of texts) {
         const embedding = await this.generateSingleEmbedding(text);
         embeddings.push(embedding);
-        
+
         // Incrémenter le compteur et afficher la progression
         this.processedCount++;
         this.logProgress();
@@ -155,16 +159,22 @@ export class LmStudioEmbeddingFunction implements IEmbeddingFunction {
   private logProgress(): void {
     const now = Date.now();
     // Vérifier si le temps écoulé depuis le dernier log est suffisant ou si c'est le dernier élément
-    if (now - this.lastLogTime >= this.LOG_INTERVAL || this.processedCount === this.totalCount) {
+    if (
+      now - this.lastLogTime >= this.LOG_INTERVAL ||
+      this.processedCount === this.totalCount
+    ) {
       this.lastLogTime = now;
-      
-      const progress = Math.round((this.processedCount / this.totalCount) * 100);
+
+      const progress = Math.round(
+        (this.processedCount / this.totalCount) * 100,
+      );
       const elapsedTime = now - this.startTime;
-      const estimatedTotalTime = (this.totalCount * elapsedTime) / this.processedCount;
+      const estimatedTotalTime =
+        (this.totalCount * elapsedTime) / this.processedCount;
       const remainingTime = Math.max(0, estimatedTotalTime - elapsedTime);
-      
+
       this.logger.log(
-        `Progression: ${this.processedCount}/${this.totalCount} (${progress}%) - Temps restant estimé: ${this.formatTime(remainingTime/1000)}`,
+        `Progression: ${this.processedCount}/${this.totalCount} (${progress}%) - Temps restant estimé: ${this.formatTime(remainingTime / 1000)}`,
       );
     }
   }
@@ -176,7 +186,7 @@ export class LmStudioEmbeddingFunction implements IEmbeddingFunction {
     const hrs = Math.floor(seconds / 3600);
     const mins = Math.floor((seconds % 3600) / 60);
     const secs = Math.floor(seconds % 60);
-    
+
     if (hrs > 0) {
       return `${hrs}h ${mins}m ${secs}s`;
     } else if (mins > 0) {
