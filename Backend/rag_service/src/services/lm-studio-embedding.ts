@@ -19,6 +19,12 @@ export class LmStudioEmbeddingFunction implements IEmbeddingFunction {
   private hasEmbeddingsApi: boolean = true;
   // Flag pour vérifier si la vérification initiale a été effectuée
   private initialCheckDone: boolean = false;
+  // Compteurs pour la progression
+  private processedCount: number = 0;
+  private totalCount: number = 0;
+  private startTime: number = 0;
+  private lastLogTime: number = 0;
+  private readonly LOG_INTERVAL: number = 5000; // Intervalle entre les logs en ms (5 secondes)
 
   constructor(private configService: ConfigService) {
     this.lmStudioUrl = this.getLmStudioUrl();
@@ -101,8 +107,13 @@ export class LmStudioEmbeddingFunction implements IEmbeddingFunction {
    * @returns Promise avec un tableau de vecteurs d'embedding
    */
   async generate(texts: string[]): Promise<number[][]> {
+    this.totalCount = texts.length;
+    this.processedCount = 0;
+    this.startTime = Date.now();
+    this.lastLogTime = this.startTime;
+    
     this.logger.log(
-      `Generating embeddings for ${texts.length} texts using LM Studio`,
+      `Démarrage de la génération d'embeddings pour ${this.totalCount} textes avec LM Studio...`,
     );
 
     // Attendre que la vérification initiale soit terminée
@@ -112,18 +123,66 @@ export class LmStudioEmbeddingFunction implements IEmbeddingFunction {
 
     try {
       const embeddings: number[][] = [];
+      const cachedCount = texts.filter(text => this.embeddingCache.has(this.hashText(text))).length;
+      if (cachedCount > 0) {
+        this.logger.log(`${cachedCount} textes déjà en cache (${Math.round(cachedCount/this.totalCount*100)}%)`);
+      }
 
       // Traiter chaque texte individuellement pour plus de robustesse
       for (const text of texts) {
         const embedding = await this.generateSingleEmbedding(text);
         embeddings.push(embedding);
+        
+        // Incrémenter le compteur et afficher la progression
+        this.processedCount++;
+        this.logProgress();
       }
 
-      this.logger.log(`Successfully generated ${embeddings.length} embeddings`);
+      const totalTime = Math.round((Date.now() - this.startTime) / 1000);
+      this.logger.log(
+        `Terminé! ${this.totalCount} embeddings générés en ${this.formatTime(totalTime)}.`,
+      );
       return embeddings;
     } catch (error) {
       this.logger.error(`Error generating embeddings: ${error.message}`);
       throw new Error(`Failed to generate embeddings: ${error.message}`);
+    }
+  }
+
+  /**
+   * Affiche la progression du traitement des embeddings
+   */
+  private logProgress(): void {
+    const now = Date.now();
+    // Vérifier si le temps écoulé depuis le dernier log est suffisant ou si c'est le dernier élément
+    if (now - this.lastLogTime >= this.LOG_INTERVAL || this.processedCount === this.totalCount) {
+      this.lastLogTime = now;
+      
+      const progress = Math.round((this.processedCount / this.totalCount) * 100);
+      const elapsedTime = now - this.startTime;
+      const estimatedTotalTime = (this.totalCount * elapsedTime) / this.processedCount;
+      const remainingTime = Math.max(0, estimatedTotalTime - elapsedTime);
+      
+      this.logger.log(
+        `Progression: ${this.processedCount}/${this.totalCount} (${progress}%) - Temps restant estimé: ${this.formatTime(remainingTime/1000)}`,
+      );
+    }
+  }
+
+  /**
+   * Formate le temps en heures, minutes et secondes
+   */
+  private formatTime(seconds: number): string {
+    const hrs = Math.floor(seconds / 3600);
+    const mins = Math.floor((seconds % 3600) / 60);
+    const secs = Math.floor(seconds % 60);
+    
+    if (hrs > 0) {
+      return `${hrs}h ${mins}m ${secs}s`;
+    } else if (mins > 0) {
+      return `${mins}m ${secs}s`;
+    } else {
+      return `${secs}s`;
     }
   }
 
